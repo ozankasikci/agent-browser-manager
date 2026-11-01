@@ -39,7 +39,10 @@ fn cli(root: &Path, args: &[&str]) -> Value {
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        for p in PROFILES.into_iter().chain(["studio-team"]) {
+        for p in PROFILES
+            .into_iter()
+            .chain(["studio-team", "transfer-source", "transfer-imported"])
+        {
             let _ = invoke(&self.0, &["stop", p]);
         }
     }
@@ -184,6 +187,7 @@ fn respond(mut stream: TcpStream) {
     }
     let route = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
     let mut cookie = "none".to_owned();
+    let mut session_cookie = false;
     for _ in 0..100 {
         let mut line = String::new();
         if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
@@ -191,6 +195,9 @@ fn respond(mut stream: TcpStream) {
         }
         if line.to_ascii_lowercase().starts_with("cookie:") {
             for part in line[7..].trim().split(';') {
+                if part.trim() == "abm_session=synthetic-session" {
+                    session_cookie = true;
+                }
                 if let Some(value) = part.trim().strip_prefix("abm_fixture=") {
                     cookie = value.to_owned();
                 }
@@ -201,12 +208,33 @@ fn respond(mut stream: TcpStream) {
         .strip_prefix("/set-cookie?who=")
         .filter(|s| PROFILES.contains(s));
     let set_cookie = value.map_or_else(String::new, |v| {
-        format!("Set-Cookie: abm_fixture={v}; Path=/; Max-Age=3600; SameSite=Strict\r\n")
+        format!("Set-Cookie: abm_fixture={v}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict\r\nSet-Cookie: abm_session=synthetic-session; Path=/; HttpOnly; SameSite=Strict\r\n")
     });
     let submitted = route.contains("note=helloRust");
     let stored = value.unwrap_or("none");
+    // Runs only inside Chrome's localhost fixture. No separate JS runtime is used.
+    let storage_script = if route.starts_with("/storage-") {
+        r#"<script>
+const request = indexedDB.open('abm_transfer_test', 1);
+request.onupgradeneeded = () => request.result.createObjectStore('state');
+request.onsuccess = () => {
+  const db = request.result;
+  if (location.pathname === '/storage-set') {
+    localStorage.setItem('abm-transfer', 'persisted-local');
+    const tx = db.transaction('state', 'readwrite');
+    tx.objectStore('state').put('persisted-indexed', 'auth');
+    tx.oncomplete = () => { db.close(); document.body.append('storage saved'); };
+  } else {
+    const read = db.transaction('state').objectStore('state').get('auth');
+    read.onsuccess = () => { document.body.append('local storage: ' + localStorage.getItem('abm-transfer') + '; indexed db: ' + read.result); db.close(); };
+  }
+};
+</script>"#
+    } else {
+        ""
+    };
     let body = format!(
-        "<!doctype html><html><head><title>ABM local fixture</title></head><body><h1>ABM fixture ready</h1><p>cookie: {cookie}</p><p>cookie stored for: {stored}</p><p>submitted: {submitted}</p><form method=get action=/><label>Note <input id=note name=note></label><button id=save type=submit>Save fixture</button></form></body></html>"
+        "<!doctype html><html><head><title>ABM local fixture</title></head><body><h1>ABM fixture ready</h1><p>cookie: {cookie}</p><p>session cookie: {session_cookie}</p><p>cookie stored for: {stored}</p><p>submitted: {submitted}</p><form method=get action=/><label>Note <input id=note name=note></label><button id=save type=submit>Save fixture</button></form>{storage_script}</body></html>"
     );
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n{set_cookie}\r\n",
@@ -462,4 +490,154 @@ fn three_profiles_mcp_ownership_and_persistence() {
     let archived = Path::new(removed["archive"].as_str().unwrap());
     assert!(archived.join("chrome/Default/Preferences").is_file());
     assert!(!root.join("studio-team").exists());
+}
+
+#[test]
+#[ignore = "real Chrome encrypted transfer; requires macOS and free managed ports"]
+fn encrypted_whole_profile_transfer_preserves_cookie_and_site_storage() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("runtime");
+    cli(&root, &["init"]);
+    let _cleanup = Cleanup(root.clone());
+    let fixture = Fixture::new();
+    cli(&root, &["start", "transfer-source", "--headless"]);
+    let mut client = Client::new(&root, "transfer-source");
+    let target = client.tool(
+        "open_tab",
+        json!({"url":format!("{}/set-cookie?who=personal",fixture.url)}),
+    )["target_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.read_until(&target, "cookie stored for: personal");
+    client.tool(
+        "navigate",
+        json!({"target_id":target,"url":format!("{}/storage-set",fixture.url)}),
+    );
+    client.read_until(&target, "storage saved");
+    let key = temp.path().join("key");
+    std::fs::write(&key, "synthetic-transfer-passphrase-only\n").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let archive = temp.path().join("profile.abm.age");
+    let export_args = [
+        "profile",
+        "export",
+        "transfer-source",
+        "--output",
+        archive.to_str().unwrap(),
+        "--passphrase-file",
+        key.to_str().unwrap(),
+    ];
+    // A running source is never silently stopped or copied mid-write.
+    assert!(!invoke(&root, &export_args).status.success());
+    assert!(!archive.exists());
+    std::fs::write(
+        root.join("transfer-source/chrome/transfer-marker"),
+        "whole-profile-file",
+    )
+    .unwrap();
+    let mut live_export_args = export_args.to_vec();
+    live_export_args.push("--stop");
+    let exported = cli(&root, &live_export_args);
+    drop(client);
+    assert!(exported["portable_cookies"].as_u64().unwrap() >= 2);
+    assert_eq!(exported["profile_state"], "stopped");
+    assert_eq!(
+        std::fs::metadata(&archive).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!invoke(&root, &export_args).status.success());
+    cli(&root, &["start", "transfer-source", "--headless"]);
+    let mut source_again = Client::new(&root, "transfer-source");
+    let source_target = source_again.tool(
+        "open_tab",
+        json!({"url":format!("{}/storage-read",fixture.url)}),
+    )["target_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    source_again.read_until(&source_target, "session cookie: true");
+    cli(&root, &["stop", "transfer-source"]);
+    drop(source_again);
+    // A wrong password or existing destination cannot publish an imported profile.
+    let wrong = temp.path().join("wrong-key");
+    std::fs::write(&wrong, "another-synthetic-passphrase\n").unwrap();
+    std::fs::set_permissions(&wrong, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        !invoke(
+            &root,
+            &[
+                "profile",
+                "import",
+                archive.to_str().unwrap(),
+                "--name",
+                "transfer-imported",
+                "--passphrase-file",
+                wrong.to_str().unwrap()
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(!root.join("transfer-imported").exists());
+    assert!(
+        !invoke(
+            &root,
+            &[
+                "profile",
+                "import",
+                archive.to_str().unwrap(),
+                "--name",
+                "transfer-source",
+                "--passphrase-file",
+                key.to_str().unwrap()
+            ]
+        )
+        .status
+        .success()
+    );
+    let imported = cli(
+        &root,
+        &[
+            "profile",
+            "import",
+            archive.to_str().unwrap(),
+            "--name",
+            "transfer-imported",
+            "--passphrase-file",
+            key.to_str().unwrap(),
+        ],
+    );
+    assert!(imported["cookies_restored"].as_u64().unwrap() >= 2);
+    assert_eq!(
+        std::fs::read_to_string(root.join("transfer-imported/chrome/transfer-marker")).unwrap(),
+        "whole-profile-file"
+    );
+    assert!(!root.join("transfer-imported/ownership.json").exists());
+    assert!(!root.join("transfer-imported/browser.json").exists());
+    cli(&root, &["start", "transfer-imported", "--headless"]);
+    let mut imported_client = Client::new(&root, "transfer-imported");
+    let target = imported_client.tool(
+        "open_tab",
+        json!({"url":format!("{}/storage-read",fixture.url)}),
+    )["target_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    imported_client.read_until(&target, "cookie: personal");
+    imported_client.read_until(&target, "session cookie: true");
+    imported_client.read_until(
+        &target,
+        "local storage: persisted-local; indexed db: persisted-indexed",
+    );
+    cli(&root, &["stop", "transfer-imported"]);
+    drop(imported_client);
+    assert!(std::fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".abm-import-")
+    }));
 }
