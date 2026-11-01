@@ -1,5 +1,8 @@
 mod browser;
 mod cdp;
+mod config;
+mod mcp;
+mod ownership;
 mod store;
 
 use anyhow::Result;
@@ -65,6 +68,23 @@ enum Action {
     Stop { profile: Profile },
     /// Inspect managed state without printing tabs, URLs, cookies, or browser websocket identifiers.
     Status { profile: Option<Profile> },
+    /// Run the Rust stdio MCP server. Does not auto-start Chrome or adopt existing tabs.
+    Mcp {
+        #[arg(long)]
+        profile: Profile,
+        #[arg(long)]
+        agent: String,
+    },
+    /// Print configuration for review. Does not modify existing agent settings. Defaults to development.
+    Config {
+        client: config::Client,
+        #[arg(long, conflicts_with = "all_profiles")]
+        profile: Option<Profile>,
+        #[arg(long)]
+        all_profiles: bool,
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -87,6 +107,32 @@ fn run() -> Result<()> {
                 .map(|p| browser::status(&store, p))
                 .collect();
             json!(status?)
+        }
+        Action::Mcp { profile, agent } => {
+            return mcp::serve(mcp::Server::new(store, profile, agent)?);
+        }
+        Action::Config {
+            client,
+            profile,
+            all_profiles,
+            agent,
+        } => {
+            let profiles = if all_profiles {
+                Profile::ALL.to_vec()
+            } else {
+                vec![profile.unwrap_or(Profile::Development)]
+            };
+            print!(
+                "{}",
+                config::render(
+                    client,
+                    &profiles,
+                    &std::env::current_exe()?,
+                    &store,
+                    &agent.unwrap_or_else(|| client.name().into())
+                )?
+            );
+            return Ok(());
         }
     };
     println!("{}", serde_json::to_string_pretty(&result)?);
