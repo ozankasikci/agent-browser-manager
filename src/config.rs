@@ -85,14 +85,14 @@ mod tests {
             include_str!("../configs/antigravity.mcp.example.json"),
         ] {
             let v: Value = serde_json::from_str(text)?;
-            for profile in Profile::ALL {
+            for profile in Profile::defaults() {
                 let entry = &v["mcpServers"][format!("abm-{}", profile.name())];
                 assert_eq!(entry["args"][2], profile.name());
                 assert!(entry["command"].as_str().unwrap().ends_with("/bin/abm"));
             }
         }
         let v: toml::Value = toml::from_str(include_str!("../configs/codex.config.example.toml"))?;
-        for profile in Profile::ALL {
+        for profile in Profile::defaults() {
             assert_eq!(
                 v["mcp_servers"][format!("abm-{}", profile.name())]["args"][2].as_str(),
                 Some(profile.name())
@@ -106,14 +106,14 @@ mod tests {
         for client in [Client::Claude, Client::Codex, Client::Antigravity] {
             let text = render(
                 client,
-                &Profile::ALL,
+                &Profile::defaults(),
                 Path::new("/tmp/agent manager/bin/abm"),
                 &store,
                 client.name(),
             )?;
             if matches!(client, Client::Codex) {
                 let v: toml::Value = toml::from_str(&text)?;
-                for profile in Profile::ALL {
+                for profile in Profile::defaults() {
                     assert_eq!(
                         v["mcp_servers"][format!("abm-{}", profile.name())]["args"][2].as_str(),
                         Some(profile.name())
@@ -122,7 +122,7 @@ mod tests {
             } else {
                 let v: Value = serde_json::from_str(&text)?;
                 assert_eq!(v["mcpServers"].as_object().unwrap().len(), 3);
-                for profile in Profile::ALL {
+                for profile in Profile::defaults() {
                     assert_eq!(
                         v["mcpServers"][format!("abm-{}", profile.name())]["args"][2],
                         profile.name()

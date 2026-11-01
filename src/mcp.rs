@@ -110,13 +110,13 @@ impl Server {
     fn tool(&self, name: &str, args: &Value) -> Result<Value> {
         validate_args(name, args)?;
         if name == "profile_status" {
-            return browser::status(&self.store, self.profile);
+            return browser::status(&self.store, &self.profile);
         }
-        let _lifecycle = self.store.lock(self.profile, "lifecycle.lock", false)?;
+        let _lifecycle = self.store.lock(&self.profile, "lifecycle.lock", false)?;
         // The short-lived, cross-process lock also serializes page operations within a profile.
-        let _ownership = self.store.lock(self.profile, "ownership.lock", true)?;
-        let (record, mut cdp) = browser::connect(&self.store, self.profile)?;
-        let path = self.store.path(self.profile, "ownership.json");
+        let _ownership = self.store.lock(&self.profile, "ownership.lock", true)?;
+        let (record, mut cdp) = browser::connect(&self.store, &self.profile)?;
+        let path = self.store.path(&self.profile, "ownership.json");
         let mut registry = Registry::for_run(store::read_json(&path)?, &record.run_id);
         if name == "list_tabs" {
             let result = cdp.call("Target.getTargets", json!({}), None)?;
@@ -406,7 +406,7 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let store = Store::new(Some(temp.path().join("state")))?;
         store.init()?;
-        let mut s = Server::new(store, Profile::Development, "codex".into())?;
+        let mut s = Server::new(store, Profile::development(), "codex".into())?;
         assert_eq!(
             s.handle(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
                 .unwrap()["error"]["code"],

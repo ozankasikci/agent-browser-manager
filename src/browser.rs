@@ -105,7 +105,7 @@ fn alive(record: &Record) -> Result<bool> {
     Ok(fingerprint(record.pid)?.is_some_and(|value| value == record.fingerprint))
 }
 
-fn verify_process(record: &Record, store: &Store, profile: Profile) -> Result<()> {
+fn verify_process(record: &Record, store: &Store, profile: &Profile) -> Result<()> {
     ensure!(
         record.schema == 1 && record.port == profile.port(),
         "managed state does not match profile"
@@ -136,11 +136,11 @@ fn verify_process(record: &Record, store: &Store, profile: Profile) -> Result<()
     Ok(())
 }
 
-pub fn load(store: &Store, profile: Profile) -> Result<Option<Record>> {
+pub fn load(store: &Store, profile: &Profile) -> Result<Option<Record>> {
     store::read_json(&store.path(profile, "browser.json"))
 }
 
-pub fn connect(store: &Store, profile: Profile) -> Result<(Record, Cdp)> {
+pub fn connect(store: &Store, profile: &Profile) -> Result<(Record, Cdp)> {
     let record = load(store, profile)?.context("profile is stopped; run abm start first")?;
     verify_process(&record, store, profile)?;
     verify_listeners(&listeners(profile.port())?, record.pid, profile.port())?;
@@ -176,7 +176,7 @@ fn chrome_path(explicit: Option<&Path>) -> Result<PathBuf> {
 
 pub fn start(
     store: &Store,
-    profile: Profile,
+    profile: &Profile,
     chrome: Option<&Path>,
     headless: bool,
 ) -> Result<Value> {
@@ -198,6 +198,16 @@ pub fn start(
         .context("fixed CDP port is unavailable")?;
     let chrome_path = chrome_path(chrome)?;
     let profile_dir = fs::canonicalize(store.chrome_dir(profile))?;
+    // Seed the display name only in a completely new, empty manager-owned directory.
+    // Existing Chrome preferences, including user-chosen names, are never rewritten.
+    if fs::read_dir(&profile_dir)?.next().is_none() {
+        let default = profile_dir.join("Default");
+        store::make_private_dir(&default)?;
+        store::write_json(
+            &default.join("Preferences"),
+            &json!({"profile":{"name":profile.name(),"using_default_name":false}}),
+        )?;
+    }
     match profile_dir.join("SingletonLock").symlink_metadata() {
         Ok(_) => {
             bail!("Chrome profile lock exists; close that profile normally before starting it")
@@ -273,7 +283,7 @@ pub fn start(
     result
 }
 
-pub fn stop(store: &Store, profile: Profile) -> Result<Value> {
+pub fn stop(store: &Store, profile: &Profile) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", true)?;
     let found = listeners(profile.port())?;
     let Some(record) = load(store, profile)? else {
@@ -318,7 +328,7 @@ pub fn stop(store: &Store, profile: Profile) -> Result<Value> {
     }
 }
 
-fn signal_managed(record: &Record, store: &Store, profile: Profile) -> Result<()> {
+fn signal_managed(record: &Record, store: &Store, profile: &Profile) -> Result<()> {
     verify_process(record, store, profile)?;
     // SAFETY: PID > 1, positive i32, process start time and command have just been verified.
     ensure!(
@@ -328,7 +338,7 @@ fn signal_managed(record: &Record, store: &Store, profile: Profile) -> Result<()
     Ok(())
 }
 
-pub fn status(store: &Store, profile: Profile) -> Result<Value> {
+pub fn status(store: &Store, profile: &Profile) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", false)?;
     let found = listeners(profile.port())?;
     let record = load(store, profile)?;
@@ -361,15 +371,15 @@ mod tests {
                 schema: 1,
                 pid: child.id(),
                 fingerprint: fingerprint(child.id())?.context("sleep process missing")?,
-                profile_dir: fs::canonicalize(store.chrome_dir(Profile::Personal))?,
+                profile_dir: fs::canonicalize(store.chrome_dir(&Profile::personal()))?,
                 chrome_path: "/bin/sleep".into(),
                 port: 9222,
                 browser_path: String::new(),
                 run_id: "not-a-browser".into(),
             };
-            store::write_json(&store.path(Profile::Personal, "browser.json"), &record)?;
+            store::write_json(&store.path(&Profile::personal(), "browser.json"), &record)?;
             ensure!(
-                stop(&store, Profile::Personal).is_err(),
+                stop(&store, &Profile::personal()).is_err(),
                 "forged browser record was accepted"
             );
             ensure!(

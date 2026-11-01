@@ -17,5 +17,7 @@
 **/Singleton*
 **/browser.json
 **/ownership.json
+**/profiles.json
+**/profiles.lock
 
 /bin/

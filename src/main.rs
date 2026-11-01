@@ -3,44 +3,19 @@ mod cdp;
 mod config;
 mod mcp;
 mod ownership;
+mod profile;
 mod store;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
+use profile::Profile;
 use serde_json::json;
 use std::path::PathBuf;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum Profile {
-    Personal,
-    Business,
-    Development,
-}
-impl Profile {
-    pub const ALL: [Self; 3] = [Self::Personal, Self::Business, Self::Development];
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Personal => "personal",
-            Self::Business => "business",
-            Self::Development => "development",
-        }
-    }
-    pub fn port(self) -> u16 {
-        match self {
-            Self::Personal => 9222,
-            Self::Business => 9223,
-            Self::Development => 9224,
-        }
-    }
-    pub fn endpoint(self) -> String {
-        format!("http://127.0.0.1:{}", self.port())
-    }
-}
 
 #[derive(Parser)]
 #[command(
     version,
-    about = "Manage dedicated local Chrome profiles and session-owned MCP tabs"
+    about = "Manage named persistent Chrome profiles and session-owned MCP tabs"
 )]
 struct Cli {
     #[arg(
@@ -54,37 +29,53 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
-    /// Initialize three empty private profile directories. Never imports existing Chrome data.
+    /// Initialize default private profile directories without importing existing Chrome data.
     Init,
-    /// Launch one dedicated Chrome profile, or verify that its managed process is already running.
+    /// Launch a named profile, creating it with a stable localhost port if it is new.
     Start {
-        profile: Profile,
+        profile: String,
         #[arg(long)]
         chrome: Option<PathBuf>,
-        #[arg(long, help = "Use Chrome's headless mode for local verification")]
+        #[arg(long)]
         headless: bool,
     },
-    /// Close only the verified managed Chrome process for this profile. Preserves all profile data.
-    Stop { profile: Profile },
-    /// Inspect managed state without printing tabs, URLs, cookies, or browser websocket identifiers.
-    Status { profile: Option<Profile> },
-    /// Run the Rust stdio MCP server. Does not auto-start Chrome or adopt existing tabs.
+    /// Close only the verified managed process for this profile. Preserve profile data.
+    Stop { profile: String },
+    /// Inspect one profile, or all default and registered custom profiles.
+    Status { profile: Option<String> },
+    /// Create or list named persistent profiles.
+    Profile {
+        #[command(subcommand)]
+        command: ProfileAction,
+    },
+    /// Run the Rust stdio MCP server for an existing profile. Does not auto-start Chrome.
     Mcp {
         #[arg(long)]
-        profile: Profile,
+        profile: String,
         #[arg(long)]
         agent: String,
     },
-    /// Print configuration for review. Does not modify existing agent settings. Defaults to development.
+    /// Print config without modifying agent settings. Defaults to development.
     Config {
         client: config::Client,
         #[arg(long, conflicts_with = "all_profiles")]
-        profile: Option<Profile>,
+        profile: Option<String>,
         #[arg(long)]
         all_profiles: bool,
         #[arg(long)]
         agent: Option<String>,
     },
+}
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// Create a persistent named profile. Its port remains stable after registration.
+    Create {
+        name: String,
+        #[arg(long, help = "Optional unused localhost port in 9225..=9324")]
+        port: Option<u16>,
+    },
+    /// List all registered profiles and their localhost endpoints without launching browsers.
+    List,
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -92,24 +83,49 @@ fn run() -> Result<()> {
     let result = match cli.command {
         Action::Init => {
             store.init()?;
-            json!({"initialized":true,"data_dir":store.root,"profiles":Profile::ALL.map(Profile::name)})
+            json!({"initialized":true,"data_dir":store.root,"profiles":store.profiles()?.iter().map(Profile::name).collect::<Vec<_>>()})
         }
         Action::Start {
             profile,
             chrome,
             headless,
-        } => browser::start(&store, profile, chrome.as_deref(), headless)?,
-        Action::Stop { profile } => browser::stop(&store, profile)?,
+        } => {
+            let profile = store.create_profile(&profile, None)?;
+            browser::start(&store, &profile, chrome.as_deref(), headless)?
+        }
+        Action::Stop { profile } => browser::stop(&store, &store.resolve_profile(&profile)?)?,
         Action::Status { profile } => {
-            let profiles = profile.map_or_else(|| Profile::ALL.to_vec(), |p| vec![p]);
-            let status: Result<Vec<_>> = profiles
-                .into_iter()
+            let profiles = match profile {
+                Some(name) => vec![store.resolve_profile(&name)?],
+                None => store.profiles()?,
+            };
+            let values: Result<Vec<_>> = profiles
+                .iter()
                 .map(|p| browser::status(&store, p))
                 .collect();
-            json!(status?)
+            json!(values?)
         }
+        Action::Profile {
+            command: ProfileAction::Create { name, port },
+        } => {
+            let p = store.create_profile(&name, port)?;
+            json!({"profile":p.name(),"port":p.port(),"endpoint":p.endpoint()})
+        }
+        Action::Profile {
+            command: ProfileAction::List,
+        } => json!(
+            store
+                .profiles()?
+                .iter()
+                .map(|p| json!({"profile":p.name(),"port":p.port(),"endpoint":p.endpoint()}))
+                .collect::<Vec<_>>()
+        ),
         Action::Mcp { profile, agent } => {
-            return mcp::serve(mcp::Server::new(store, profile, agent)?);
+            return mcp::serve(mcp::Server::new(
+                store.clone(),
+                store.resolve_profile(&profile)?,
+                agent,
+            )?);
         }
         Action::Config {
             client,
@@ -118,9 +134,9 @@ fn run() -> Result<()> {
             agent,
         } => {
             let profiles = if all_profiles {
-                Profile::ALL.to_vec()
+                store.profiles()?
             } else {
-                vec![profile.unwrap_or(Profile::Development)]
+                vec![store.resolve_profile(profile.as_deref().unwrap_or("development"))?]
             };
             print!(
                 "{}",

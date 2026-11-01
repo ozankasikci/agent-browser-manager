@@ -63,8 +63,8 @@ impl Store {
             f.sync_all()?;
         }
         self.check()?;
-        for profile in crate::Profile::ALL {
-            let dir = self.profile_dir(profile);
+        for profile in crate::Profile::defaults() {
+            let dir = self.profile_dir(&profile);
             make_private_dir(&dir)?;
             make_private_dir(&dir.join("chrome"))?;
         }
@@ -81,17 +81,28 @@ impl Store {
         Ok(())
     }
 
-    pub fn profile_dir(&self, p: crate::Profile) -> PathBuf {
+    pub fn profile_dir(&self, p: &crate::Profile) -> PathBuf {
         self.root.join(p.name())
     }
-    pub fn chrome_dir(&self, p: crate::Profile) -> PathBuf {
+    pub fn chrome_dir(&self, p: &crate::Profile) -> PathBuf {
         self.profile_dir(p).join("chrome")
     }
-    pub fn path(&self, p: crate::Profile, name: &str) -> PathBuf {
+    pub fn path(&self, p: &crate::Profile, name: &str) -> PathBuf {
         self.profile_dir(p).join(name)
     }
 
-    pub fn lock(&self, p: crate::Profile, name: &str, exclusive: bool) -> Result<Lock> {
+    pub fn root_lock(&self, name: &str, exclusive: bool) -> Result<Lock> {
+        self.check()?;
+        let file = private_open(&self.root.join(name), false)?;
+        if exclusive {
+            FileExt::lock_exclusive(&file)?;
+        } else {
+            FileExt::lock_shared(&file)?;
+        }
+        Ok(Lock { _file: file })
+    }
+
+    pub fn lock(&self, p: &crate::Profile, name: &str, exclusive: bool) -> Result<Lock> {
         self.check()?;
         check_dir(&self.profile_dir(p))?;
         check_dir(&self.chrome_dir(p))?;
@@ -232,10 +243,10 @@ mod tests {
         store.init()?;
         store.init()?;
         assert_eq!(fs::metadata(&store.root)?.mode() & 0o777, 0o700);
-        for p in crate::Profile::ALL {
-            assert_eq!(fs::metadata(store.chrome_dir(p))?.mode() & 0o777, 0o700);
+        for p in crate::Profile::defaults() {
+            assert_eq!(fs::metadata(store.chrome_dir(&p))?.mode() & 0o777, 0o700);
         }
-        let path = store.path(crate::Profile::Personal, "test.json");
+        let path = store.path(&crate::Profile::personal(), "test.json");
         write_json(&path, &vec![1, 2])?;
         assert_eq!(fs::metadata(&path)?.mode() & 0o777, 0o600);
         assert_eq!(read_json::<Vec<i32>>(&path)?, Some(vec![1, 2]));
