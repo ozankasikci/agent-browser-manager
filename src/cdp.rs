@@ -28,17 +28,29 @@ pub fn browser_path(port: u16) -> Result<String> {
         stream,
         "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )?;
+    let value = discovery_response(&mut stream)?;
+    let url = value["webSocketDebuggerUrl"]
+        .as_str()
+        .context("CDP browser endpoint missing")?;
+    validate_ws_url(url, port)
+}
+
+fn discovery_response(stream: &mut impl Read) -> Result<Value> {
+    // Chrome can keep discovery sockets alive even with Connection: close.
+    // Read exactly Content-Length rather than waiting for EOF.
     let mut data = Vec::new();
-    stream.take((MAX_HTTP + 1) as u64).read_to_end(&mut data)?;
-    ensure!(
-        data.len() <= MAX_HTTP,
-        "CDP discovery response is too large"
-    );
-    let split = data
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .context("invalid CDP HTTP response")?;
-    let headers = std::str::from_utf8(&data[..split])?;
+    while !data.ends_with(b"\r\n\r\n") {
+        ensure!(
+            data.len() < 16 * 1024,
+            "CDP discovery headers are too large"
+        );
+        let mut byte = [0];
+        stream
+            .read_exact(&mut byte)
+            .context("incomplete CDP discovery headers")?;
+        data.push(byte[0]);
+    }
+    let headers = std::str::from_utf8(&data)?;
     ensure!(
         headers
             .lines()
@@ -50,12 +62,25 @@ pub fn browser_path(port: u16) -> Result<String> {
         !headers.to_ascii_lowercase().contains("transfer-encoding:"),
         "unsupported CDP discovery transfer encoding"
     );
-    let value: Value =
-        serde_json::from_slice(&data[split + 4..]).context("invalid CDP discovery data")?;
-    let url = value["webSocketDebuggerUrl"]
-        .as_str()
-        .context("CDP browser endpoint missing")?;
-    validate_ws_url(url, port)
+    let lengths: Vec<_> = headers
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then_some(value.trim())
+        })
+        .collect();
+    ensure!(
+        lengths.len() == 1,
+        "CDP discovery requires one Content-Length header"
+    );
+    let length: usize = lengths[0].parse().context("invalid CDP Content-Length")?;
+    ensure!(length <= MAX_HTTP, "CDP discovery response is too large");
+    let mut body = vec![0; length];
+    stream
+        .read_exact(&mut body)
+        .context("incomplete CDP discovery body")?;
+    serde_json::from_slice(&body).context("invalid CDP discovery data")
 }
 
 pub fn validate_ws_url(raw: &str, port: u16) -> Result<String> {
@@ -173,6 +198,23 @@ pub fn validate_navigation(raw: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_respects_content_length_without_waiting_for_eof() -> Result<()> {
+        let mut input = std::io::Cursor::new(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}socket-remains-open",
+        );
+        assert_eq!(discovery_response(&mut input)?, json!({}));
+        assert!(input.position() < input.get_ref().len() as u64);
+        for bad in [
+            "HTTP/1.1 302 Found\r\nContent-Length: 2\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+        ] {
+            assert!(discovery_response(&mut std::io::Cursor::new(bad)).is_err());
+        }
+        Ok(())
+    }
     #[test]
     fn rejects_remote_and_wrong_port_endpoints() {
         for raw in [

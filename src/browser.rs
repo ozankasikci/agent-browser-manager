@@ -199,7 +199,10 @@ pub fn start(
     let chrome_path = chrome_path(chrome)?;
     let profile_dir = fs::canonicalize(store.chrome_dir(profile))?;
     ensure!(
-        !profile_dir.join("SingletonLock").symlink_metadata().is_ok(),
+        profile_dir
+            .join("SingletonLock")
+            .symlink_metadata()
+            .is_err(),
         "Chrome profile lock exists; close that profile normally before starting it"
     );
     let mut command = Command::new(&chrome_path);
