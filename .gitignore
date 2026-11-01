@@ -21,6 +21,7 @@
 **/profiles.lock
 **/.archive/
 *.abm.age
+/exports/
 *.passphrase
 **/.abm-import-*/
 **/transfer.json

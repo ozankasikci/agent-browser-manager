@@ -10,11 +10,12 @@ Install the current binary with `scripts/setup.sh` if needed. Export while the s
 
 ```sh
 cd ~/projects/agent-browser-manager
+mkdir -p -m 700 exports
 ./bin/abm profile export longhorn-games --stop \
-  --output "$HOME/Downloads/longhorn-games.abm.age"
+  --output "$PWD/exports/longhorn-games.abm.age"
 ```
 
-The command prompts twice for a passphrase without echoing it. Use a strong passphrase, at least 12 bytes long. The output must be an absolute path, outside the manager runtime directory and outside Git repositories. Existing output files are never overwritten. Keep the encrypted archive and its passphrase separate.
+The command prompts twice for a passphrase without echoing it. Use a strong passphrase, at least 12 bytes long. The output must be an absolute path outside the manager runtime directory. This project's `exports/` folder is gitignored. Inside any Git repository, export verifies that both the destination directory and archive are ignored, and refuses tracked archive paths, even if deleted from disk. Git must be available for that check. Filename-only ignore rules are insufficient because a temporary encrypted file is created in the same directory. Existing output files are never overwritten. Keep the encrypted archive and its passphrase separate.
 
 The `--stop` option explicitly allows the command to capture the active Chrome profile's cookies and then close that browser gracefully. Without it, a running source is refused. Export holds the lifecycle lock, briefly launches any remaining persistent internal Chrome profiles headlessly, asks verified local Chrome for their available cookies, and closes them. A source that is already stopped can also be exported, but session cookies already discarded by Chrome cannot be recovered.
 

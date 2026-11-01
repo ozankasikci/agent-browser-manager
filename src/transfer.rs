@@ -14,6 +14,7 @@ use std::{
     io::{self, BufReader, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
 };
 use zeroize::Zeroizing;
 
@@ -311,6 +312,40 @@ fn active_directory(cdp: &mut crate::cdp::Cdp, root: &Path) -> Result<String> {
     result
 }
 
+fn check_git_output(parent: &Path, output: &Path) -> Result<()> {
+    if parent
+        .ancestors()
+        .any(|dir| dir.join(".git").symlink_metadata().is_ok())
+    {
+        // The directory must be ignored too: encryption writes a temporary
+        // file there before publishing the final archive. Do not use --no-index,
+        // since a previously tracked archive must still be refused.
+        for path in [parent, output] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(parent)
+                .args([
+                    "-c",
+                    "core.fsmonitor=false",
+                    "check-ignore",
+                    "--quiet",
+                    "--",
+                ])
+                .arg(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("cannot verify Git ignore rules for the export destination")?;
+            ensure!(
+                status.success(),
+                "exports inside Git repositories require a gitignored directory and an untracked, ignored archive; use the project's exports/ folder"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn export(
     store: &Store,
     name: &str,
@@ -324,11 +359,8 @@ pub fn export(
     let profile = store.resolve_profile(name)?;
     ensure!(output.is_absolute(), "output must be an absolute path");
     let parent = fs::canonicalize(output.parent().context("output has no parent")?)?;
-    ensure!(
-        !parent.ancestors().any(|dir| dir.join(".git").exists()),
-        "save authentication transfer archives outside Git repositories"
-    );
     let output = parent.join(output.file_name().context("output has no filename")?);
+    check_git_output(&parent, &output)?;
     ensure!(
         output.symlink_metadata().is_err(),
         "output already exists; refusing to overwrite it"
@@ -373,6 +405,7 @@ pub fn export(
     browser::ensure_stopped_for_archive(store, &profile)
         .context("profile was opened during export; no archive was published")?;
     encrypted.as_file().sync_all()?;
+    check_git_output(&parent, &output)?;
     encrypted.persist_noclobber(&output).map_err(|_| {
         anyhow::anyhow!("could not publish encrypted archive without overwriting a file")
     })?;
@@ -994,6 +1027,42 @@ mod tests {
         let mut opaque = cookie;
         opaque["partitionKeyOpaque"] = json!(true);
         assert!(portable_cookie(&opaque)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn git_exports_require_an_ignored_directory_and_untracked_archive() -> Result<()> {
+        let temp = private_tempdir()?;
+        let root = temp.path();
+        let git = |args: &[&str]| -> Result<()> {
+            ensure!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(root)
+                    .args(args)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()?
+                    .success(),
+                "test Git command failed"
+            );
+            Ok(())
+        };
+        check_git_output(root, &root.join("outside.abm.age"))?;
+        git(&["init", "--quiet"])?;
+        fs::write(root.join(".gitignore"), "/exports/\n*.abm.age\n")?;
+        let exports = root.join("exports");
+        store::make_private_dir(&exports)?;
+        check_git_output(&exports, &exports.join("profile.abm.age"))?;
+        // A filename-only ignore rule leaves temporary archive files exposed.
+        assert!(check_git_output(root, &root.join("profile.abm.age")).is_err());
+        let tracked = exports.join("tracked.abm.age");
+        fs::write(&tracked, "synthetic test data")?;
+        git(&["add", "--force", "--", "exports/tracked.abm.age"])?;
+        fs::remove_file(&tracked)?;
+        assert!(check_git_output(&exports, &tracked).is_err());
+        fs::write(root.join(".gitignore"), "*.abm.age\n")?;
+        assert!(check_git_output(&exports, &exports.join("profile.abm.age")).is_err());
         Ok(())
     }
 
