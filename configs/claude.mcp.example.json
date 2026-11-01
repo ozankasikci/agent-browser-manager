@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "abm-personal": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "personal", "--agent", "claude"]
+    },
+    "abm-business": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "business", "--agent", "claude"]
+    },
+    "abm-development": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "development", "--agent", "claude"]
+    }
+  }
+}

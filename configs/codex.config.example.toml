@@ -1,0 +1,18 @@
+# Merge only the identities you intend to expose. Replace the binary path.
+[mcp_servers.abm-personal]
+command = "/ABSOLUTE/PATH/agent-browser-manager/bin/abm"
+args = ["mcp", "--profile", "personal", "--agent", "codex"]
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+
+[mcp_servers.abm-business]
+command = "/ABSOLUTE/PATH/agent-browser-manager/bin/abm"
+args = ["mcp", "--profile", "business", "--agent", "codex"]
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+
+[mcp_servers.abm-development]
+command = "/ABSOLUTE/PATH/agent-browser-manager/bin/abm"
+args = ["mcp", "--profile", "development", "--agent", "codex"]
+startup_timeout_sec = 10
+tool_timeout_sec = 60

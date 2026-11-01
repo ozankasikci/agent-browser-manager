@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "abm-personal": {
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "personal", "--agent", "antigravity"]
+    },
+    "abm-business": {
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "business", "--agent", "antigravity"]
+    },
+    "abm-development": {
+      "command": "/ABSOLUTE/PATH/agent-browser-manager/bin/abm",
+      "args": ["mcp", "--profile", "development", "--agent", "antigravity"]
+    }
+  }
+}

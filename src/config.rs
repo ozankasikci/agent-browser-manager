@@ -79,6 +79,28 @@ pub fn render(
 mod tests {
     use super::*;
     #[test]
+    fn checked_in_templates_are_valid_and_cover_the_fixed_profiles() -> Result<()> {
+        for text in [
+            include_str!("../configs/claude.mcp.example.json"),
+            include_str!("../configs/antigravity.mcp.example.json"),
+        ] {
+            let v: Value = serde_json::from_str(text)?;
+            for profile in Profile::ALL {
+                let entry = &v["mcpServers"][format!("abm-{}", profile.name())];
+                assert_eq!(entry["args"][2], profile.name());
+                assert!(entry["command"].as_str().unwrap().ends_with("/bin/abm"));
+            }
+        }
+        let v: toml::Value = toml::from_str(include_str!("../configs/codex.config.example.toml"))?;
+        for profile in Profile::ALL {
+            assert_eq!(
+                v["mcp_servers"][format!("abm-{}", profile.name())]["args"][2].as_str(),
+                Some(profile.name())
+            );
+        }
+        Ok(())
+    }
+    #[test]
     fn generated_configs_parse_and_do_not_invoke_a_runtime() -> Result<()> {
         let store = Store::new(Some("/tmp/abm data".into()))?;
         for client in [Client::Claude, Client::Codex, Client::Antigravity] {
