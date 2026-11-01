@@ -64,8 +64,12 @@ pub fn passphrase(file: Option<&Path>, confirm: bool) -> Result<SecretString> {
         first
     };
     ensure!(
-        (12..=1024).contains(&value.len()),
-        "passphrase must contain 12 to 1024 bytes"
+        value.chars().count() >= 8,
+        "passphrase must contain at least 8 characters"
+    );
+    ensure!(
+        value.len() <= 1024,
+        "passphrase must not exceed 1024 UTF-8 bytes"
     );
     Ok(SecretString::from(std::mem::take(&mut *value)))
 }
@@ -1015,6 +1019,17 @@ mod tests {
         let link = temp.path().join("link");
         symlink(&path, &link)?;
         assert!(passphrase(Some(&link), false).is_err());
+        for (value, accepted) in [
+            ("1234567".to_owned(), false),
+            ("12345678".to_owned(), true),
+            ("é".repeat(7), false),
+            ("é".repeat(8), true),
+            ("x".repeat(1024), true),
+            ("x".repeat(1025), false),
+        ] {
+            fs::write(&path, value)?;
+            assert_eq!(passphrase(Some(&path), false).is_ok(), accepted);
+        }
         Ok(())
     }
     #[test]
