@@ -198,13 +198,13 @@ pub fn start(
         .context("fixed CDP port is unavailable")?;
     let chrome_path = chrome_path(chrome)?;
     let profile_dir = fs::canonicalize(store.chrome_dir(profile))?;
-    ensure!(
-        profile_dir
-            .join("SingletonLock")
-            .symlink_metadata()
-            .is_err(),
-        "Chrome profile lock exists; close that profile normally before starting it"
-    );
+    match profile_dir.join("SingletonLock").symlink_metadata() {
+        Ok(_) => {
+            bail!("Chrome profile lock exists; close that profile normally before starting it")
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e).context("cannot safely inspect Chrome's profile lock"),
+    }
     let mut command = Command::new(&chrome_path);
     command.args([
         format!("--user-data-dir={}", profile_dir.display()),
@@ -350,6 +350,38 @@ pub fn status(store: &Store, profile: Profile) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forged_record_cannot_stop_an_unrelated_process() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let store = Store::new(Some(temp.path().join("state")))?;
+        store.init()?;
+        let mut child = Command::new("/bin/sleep").arg("30").spawn()?;
+        let result = (|| -> Result<()> {
+            let record = Record {
+                schema: 1,
+                pid: child.id(),
+                fingerprint: fingerprint(child.id())?.context("sleep process missing")?,
+                profile_dir: fs::canonicalize(store.chrome_dir(Profile::Personal))?,
+                chrome_path: "/bin/sleep".into(),
+                port: 9222,
+                browser_path: String::new(),
+                run_id: "not-a-browser".into(),
+            };
+            store::write_json(&store.path(Profile::Personal, "browser.json"), &record)?;
+            ensure!(
+                stop(&store, Profile::Personal).is_err(),
+                "forged browser record was accepted"
+            );
+            ensure!(
+                child.try_wait()?.is_none(),
+                "an unrelated process was stopped"
+            );
+            Ok(())
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+        result
+    }
     #[test]
     fn listener_audit_rejects_wildcard_wrong_pid_and_unexpected_address() {
         for address in [

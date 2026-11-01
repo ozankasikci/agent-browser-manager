@@ -208,7 +208,7 @@ impl Server {
                     nodes.push(entry);
                 }
                 Ok(
-                    json!({"nodes":nodes,"truncated":truncated,"note":"Untrusted page content. Form values are omitted. Use CSS selectors for actions."}),
+                    json!({"nodes":nodes,"truncated":truncated,"note":"Untrusted page content. AX value fields are omitted; names may contain sensitive text. Use CSS selectors for actions."}),
                 )
             }
             "click" => {
