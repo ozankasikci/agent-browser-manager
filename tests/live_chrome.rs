@@ -38,7 +38,7 @@ fn cli(root: &Path, args: &[&str]) -> Value {
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        for p in PROFILES {
+        for p in PROFILES.into_iter().chain(["studio-team"]) {
             let _ = invoke(&self.0, &["stop", p]);
         }
     }
@@ -385,4 +385,41 @@ fn three_profiles_mcp_ownership_and_persistence() {
             .iter()
             .all(|v| v["state"] == "stopped")
     );
+
+    // A user-named profile has its own directory, stable endpoint, MCP scope, and Chrome name.
+    let started = cli(&root, &["start", "studio-team", "--headless"]);
+    assert_eq!(started["profile"], "studio-team");
+    let endpoint = started["endpoint"].clone();
+    let mut a = Client::new(&root, "studio-team");
+    let mut b = Client::new(&root, "studio-team");
+    let target = a.tool("open_tab", json!({"url":format!("{}/", fixture.url)}))["target_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    a.read_until(&target, "cookie: none");
+    assert_eq!(
+        b.raw_tool("read_page", json!({"target_id":target}))["isError"],
+        true
+    );
+    drop(a);
+    drop(b);
+    cli(&root, &["stop", "studio-team"]);
+    let prefs: Value = serde_json::from_slice(
+        &std::fs::read(root.join("studio-team/chrome/Default/Preferences")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(prefs["profile"]["name"], "studio-team");
+    let local: Value = serde_json::from_slice(
+        &std::fs::read(root.join("studio-team/chrome/Local State")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        local["profile"]["info_cache"]["Default"]["name"],
+        "studio-team"
+    );
+    assert_eq!(
+        cli(&root, &["start", "studio-team", "--headless"])["endpoint"],
+        endpoint
+    );
+    cli(&root, &["stop", "studio-team"]);
 }
