@@ -1,6 +1,6 @@
 # Encrypted whole-profile transfer
 
-Export/import is an explicit Rust CLI operation. It transfers one manager profile's Chrome user-data directory, together with portable cookies collected from its persistent Chrome profiles. There is no website allowlist. It does not add cookie access to the MCP tools.
+Export/import is an explicit Rust CLI operation. It transfers one manager profile's Chrome data, together with portable cookies collected from its persistent Chrome profiles. New exports exclude specific rebuildable caches and downloaded components, then compress the remaining data before encrypting it. There is no website allowlist. It does not add cookie access to the MCP tools.
 
 This version supports **Mac-to-Mac transfers**. The destination needs this manager and a compatible current Google Chrome installation. Cross-platform imports are rejected rather than treated as verified.
 
@@ -27,6 +27,8 @@ The export leaves the source stopped. Start it again normally if you want to kee
 ./scripts/start.sh longhorn-games
 ```
 
+To replace an older large export, use a new filename, such as `--output "$PWD/exports/longhorn-games-small.abm.age"`. Existing archives are retained and never overwritten. Compression and exclusions apply to new exports; an existing archive does not shrink automatically. The export result reports `archive_bytes`, `compression: "gzip"`, and `rebuildable_data_excluded: true`. The size reduction depends on the profile's contents.
+
 ## Import on the destination Mac
 
 Copy the `.abm.age` file through your chosen transfer method. Install and initialize the manager, then import:
@@ -37,6 +39,8 @@ cd ~/projects/agent-browser-manager
 ./bin/abm profile import "$HOME/Downloads/longhorn-games.abm.age"
 ./scripts/start.sh longhorn-games
 ```
+
+Use the latest manager on the destination Mac. It automatically reads both new compressed archives and older uncompressed archives. Versions released before compression support cannot read the new compressed payload.
 
 Import prompts for the passphrase. By default, it uses the archived manager profile name. It requires a new name and refuses to overwrite any existing profile or directory. If that name is already in use, choose a different manager name:
 
@@ -55,11 +59,20 @@ If temporary Chrome cannot be stopped, private recovery data is retained and its
 
 ## What transfers
 
-- Persistent browser files, including bookmarks, history, preferences, local storage, IndexedDB, extension data, and other data stored beneath the selected Chrome user-data directory.
+- Persistent browser files, including bookmarks, history, preferences, local storage, IndexedDB, session storage, service worker data and extension data, except the explicit rebuildable-data exclusions below.
 - Available cookies from every persistent internal Chrome profile recorded in its profile-info cache, including HttpOnly cookies, session cookies, expiry, SameSite and supported partitioning attributes.
 - Original encrypted password database files as browser files. This does **not** make their OS-protected password contents portable.
 
 Machine/process state such as Chrome singleton locks, debugging endpoint files, and running-version links is excluded. Manager process records, agent tab grants, manager registry entries, agent configuration backups, and removed-profile archives are outside the selected Chrome directory and are not exported. Incognito/guest in-memory sessions are not transferred. Symbolic links, hard links, sockets and other special files are rejected, except the explicitly excluded Chrome runtime links.
+
+## Rebuildable data excluded from new exports
+
+Only these exact paths are skipped. Export does not delete them from the source:
+
+- At the Chrome user-data root: `component_crx_cache`, `extensions_crx_cache`, `optimization_guide_model_store`, `OnDeviceHeadSuggestModel`, `WasmTtsEngine`, `Safe Browsing`, `BrowserMetrics`, `DeferredBrowserMetrics`, `ShaderCache`, `GrShaderCache`, and `GraphiteDawnCache`.
+- Directly inside each persistent internal Chrome profile identified by the cookie manifest: `Cache`, `Code Cache`, `GPUCache`, `ShaderCache`, `GrShaderCache`, `DawnGraphiteCache`, and `DawnWebGPUCache`.
+
+These are downloaded components, browser metrics, or browser rendering/network caches. Chrome may rebuild or download them on the destination, so some browser features can need network access again. Actual profile directories take precedence over a matching component name. Unknown paths are retained. There is no wildcard exclusion for names containing `Cache`, and similarly named data within extensions, IndexedDB, local storage or service worker CacheStorage is preserved. Old archives are extracted as written; import does not strip their caches.
 
 ## Login limits and reporting
 
@@ -69,7 +82,7 @@ Opaque partitioned cookies that Chrome cannot represent portably are skipped and
 
 Live tab state and authentication held only in a page's memory cannot be guaranteed. Use `--stop` with the running source for the best available cookie capture. Other internal Chrome profiles are captured through a temporary launch, so their previously discarded session cookies cannot be recovered. The package carries the browser data and available cookie state; it cannot promise that every login is transferable.
 
-The archive uses the standard age format with passphrase-based scrypt at work factor 18 and authenticated streaming encryption. Its payload is a versioned tar archive. Import caps scrypt work at 18, accepts regular files and directories only, rejects unsafe/duplicate paths and unsupported metadata, and limits extracted data to 20 GiB and 200,000 entries by default. `--max-bytes` deliberately changes the data-size limit on export or import. No compression is used.
+The archive uses the standard age format with passphrase-based scrypt at work factor 18 and authenticated streaming encryption. New exports stream tar data through gzip compression and then age encryption, entirely in Rust. The encrypted payload retains manifest schema version 1. Import detects gzip or legacy raw tar, caps scrypt work at 18, accepts regular files and directories only, rejects unsafe/duplicate paths and unsupported metadata, and limits extracted data to 20 GiB and 200,000 entries by default. These limits apply to uncompressed data; `--max-bytes` deliberately changes the data-size limit on export or import. Import also validates gzip checksums and the final age authentication tag, rejects optional gzip headers and extra gzip members/trailing compressed bytes, and installs nothing until verification finishes.
 
 For automation, both commands accept `--passphrase-file /absolute/private/file`. The file must be a regular, unlinked file owned by you with mode `600`; it contains a UTF-8 passphrase, with trailing line endings ignored. Passphrases are not accepted as literal command-line arguments or environment variables. Interactive use avoids creating a passphrase file.
 
@@ -87,6 +100,6 @@ Merge only the intended entries into the destination agent's settings. For Claud
 
 ## Verification scope
 
-Automated checks use disposable profiles and synthetic credentials. They cover encryption round trips, wrong passphrases, tampered/truncated archives, unsafe extraction, private file permissions, source-running refusal, destination conflicts, and a real-Chrome round trip for persistent and session cookies, local storage, IndexedDB, and ordinary profile files. A second Chrome check verifies that two internal profiles retain separate cookie jars. Run these opt-in browser checks with `scripts/verify.sh --chrome` when the managed test ports are free. Real account logins and a physical second-Mac transfer still require user verification. No actual Longhorn login state is exported by the tests.
+Automated checks use disposable profiles and synthetic credentials. They cover encryption round trips, legacy uncompressed imports, compression size reduction on repetitive fixture data, exclusion and retention rules, wrong passphrases, tampered/truncated archives, gzip integrity and expansion limits, unsafe extraction, private file permissions, source-running refusal, destination conflicts, and a real-Chrome compressed round trip for persistent and session cookies, local storage, IndexedDB, and ordinary profile files. A second Chrome check verifies that two internal profiles retain separate cookie jars. Run these opt-in browser checks with `scripts/verify.sh --chrome` when the managed test ports are free. Real account logins and a physical second-Mac transfer still require user verification. No actual Longhorn login state is exported by the tests.
 
-Sources: [age Rust API](https://docs.rs/age/0.11.5/age/), [Chrome Storage protocol](https://chromedevtools.github.io/devtools-protocol/tot/Storage/), [Chromium credential storage](https://github.com/chromium/chromium/blob/main/docs/security/faq.md), and [device-bound sessions](https://developer.chrome.com/blog/dbsc-windows-announcement).
+Sources: [age Rust API](https://docs.rs/age/0.11.5/age/), [flate2 streaming decoder](https://docs.rs/flate2/1.1.10/flate2/bufread/struct.GzDecoder.html), [Chromium prediction model store](https://github.com/chromium/chromium/blob/main/components/optimization_guide/core/delivery/prediction_model_store.cc), [downloadable speech engine](https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/component_updater/wasm_tts_engine_component_installer.cc), [Chrome Storage protocol](https://chromedevtools.github.io/devtools-protocol/tot/Storage/), [Chromium credential storage](https://github.com/chromium/chromium/blob/main/docs/security/faq.md), and [device-bound sessions](https://developer.chrome.com/blog/dbsc-windows-announcement).

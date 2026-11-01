@@ -108,7 +108,7 @@ Default profiles can be removed in the same way. The private registry remembers 
 
 ## Launch, sign in, stop
 
-For encrypted migration of browser data and available logins to another Mac, see [encrypted profile transfer](docs/profile-transfer.md). The CLI provides `profile export` and `profile import`; it never guarantees that device-bound sessions will remain signed in.
+For encrypted migration of browser data and available logins to another Mac, see [encrypted profile transfer](docs/profile-transfer.md). The CLI provides `profile export` and `profile import`. New exports compress the data and exclude specific rebuildable caches and downloaded Chrome components; login cookies and site storage are retained. Older uncompressed archives remain importable with the latest manager. Device-bound sessions can still require signing in again.
 
 ```sh
 ./scripts/start.sh personal
