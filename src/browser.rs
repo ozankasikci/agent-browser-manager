@@ -182,6 +182,16 @@ pub fn start(
     headless: bool,
 ) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", true)?;
+    start_locked(store, profile, chrome, headless, None)
+}
+
+pub(crate) fn start_locked(
+    store: &Store,
+    profile: &Profile,
+    chrome: Option<&Path>,
+    headless: bool,
+    internal_profile: Option<&str>,
+) -> Result<Value> {
     if let Some(record) = load(store, profile)? {
         if alive(&record)? {
             connect(store, profile)?;
@@ -229,6 +239,26 @@ pub fn start(
     ]);
     if headless {
         command.arg("--headless=new");
+    }
+    if let Some(directory) = internal_profile {
+        ensure!(
+            !directory.is_empty()
+                && Path::new(directory).components().count() == 1
+                && matches!(
+                    Path::new(directory).components().next(),
+                    Some(std::path::Component::Normal(_))
+                ),
+            "invalid internal Chrome profile directory"
+        );
+        command.arg(format!("--profile-directory={directory}"));
+        command.arg("--disable-background-networking");
+        command.arg("--restore-last-session");
+    } else if let Some(state) = store::read_json::<Value>(&store.path(profile, "transfer.json"))? {
+        ensure!(
+            state["schema"] == 1 && state["restore_last_session"] == true,
+            "invalid imported session settings"
+        );
+        command.arg("--restore-last-session");
     }
     command
         .arg("about:blank")
@@ -322,6 +352,10 @@ pub fn ensure_stopped_for_archive(store: &Store, profile: &Profile) -> Result<()
 
 pub fn stop(store: &Store, profile: &Profile) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", true)?;
+    stop_locked(store, profile)
+}
+
+pub(crate) fn stop_locked(store: &Store, profile: &Profile) -> Result<Value> {
     let found = listeners(profile.port())?;
     let Some(record) = load(store, profile)? else {
         ensure!(
@@ -350,6 +384,14 @@ pub fn stop(store: &Store, profile: &Profile) -> Result<Value> {
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
+        // Snapshot commands start and stop Chrome in the same CLI process. Reap
+        // that child so an exited zombie is not mistaken for a live browser.
+        // SAFETY: the positive PID was validated against the managed process.
+        // WNOHANG never signals it; ECHILD is normal for independently launched Chrome.
+        let mut child_status = 0;
+        unsafe {
+            libc::waitpid(record.pid as i32, &mut child_status, libc::WNOHANG);
+        }
         if !alive(&record)? {
             ensure!(
                 listeners(profile.port())?.is_empty(),
