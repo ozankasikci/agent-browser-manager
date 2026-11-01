@@ -1,0 +1,19 @@
+/target/
+/.local/
+/.mcp.json
+/.codex/
+/.agents/
+.DS_Store
+*.log
+.env
+.env.*
+# Never commit a Chrome data directory or runtime state.
+**/Default/
+**/Profile */
+**/Local State
+**/Cookies
+**/Login Data
+**/DevToolsActivePort
+**/Singleton*
+**/browser.json
+**/ownership.json
