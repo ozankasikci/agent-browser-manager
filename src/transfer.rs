@@ -6,12 +6,13 @@ use crate::{
 };
 use age::secrecy::SecretString;
 use anyhow::{Context, Result, ensure};
+use flate2::{Compression, bufread::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, Read, Write},
+    io::{self, BufReader, Cursor, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -122,6 +123,52 @@ fn transient(path: &Path) -> bool {
                     "DevToolsActivePort" | "RunningChromeVersion" | "lockfile"
                 )
         })
+}
+
+// Exact paths only. Never match arbitrary '*Cache*' names inside site or
+// extension storage, which can contain authentication and offline data.
+const ROOT_REBUILDABLE: &[&str] = &[
+    "component_crx_cache",
+    "extensions_crx_cache",
+    "optimization_guide_model_store",
+    "OnDeviceHeadSuggestModel",
+    "WasmTtsEngine",
+    "Safe Browsing",
+    "BrowserMetrics",
+    "DeferredBrowserMetrics",
+    "ShaderCache",
+    "GrShaderCache",
+    "GraphiteDawnCache",
+];
+const PROFILE_REBUILDABLE: &[&str] = &[
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "ShaderCache",
+    "GrShaderCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+];
+
+fn rebuildable(path: &Path, profiles: &[CookieStore]) -> bool {
+    let mut parts = path.iter();
+    let Some(first) = parts.next().and_then(|p| p.to_str()) else {
+        return false;
+    };
+    let is_profile = profiles.iter().any(|p| p.directory == first);
+    let second = parts.next();
+    if parts.next().is_some() {
+        return false;
+    }
+    match second {
+        None => !is_profile && ROOT_REBUILDABLE.contains(&first),
+        Some(second) => {
+            is_profile
+                && second
+                    .to_str()
+                    .is_some_and(|p| PROFILE_REBUILDABLE.contains(&p))
+        }
+    }
 }
 
 fn internal_profiles(chrome: &Path) -> Result<Vec<String>> {
@@ -409,13 +456,14 @@ pub fn export(
     browser::ensure_stopped_for_archive(store, &profile)
         .context("profile was opened during export; no archive was published")?;
     encrypted.as_file().sync_all()?;
+    let archive_bytes = encrypted.as_file().metadata()?.len();
     check_git_output(&parent, &output)?;
     encrypted.persist_noclobber(&output).map_err(|_| {
         anyhow::anyhow!("could not publish encrypted archive without overwriting a file")
     })?;
     File::open(&parent)?.sync_all()?;
     Ok(
-        json!({"profile":name,"exported":true,"archive":output,"portable_cookies":count,"cookie_profiles":manifest.cookie_stores.len(),"skipped_opaque_cookies":skipped,"profile_state":"stopped","note":"Device-bound sessions and OS-protected passwords may require signing in again."}),
+        json!({"profile":name,"exported":true,"archive":output,"archive_bytes":archive_bytes,"compression":"gzip","rebuildable_data_excluded":true,"portable_cookies":count,"cookie_profiles":manifest.cookie_stores.len(),"skipped_opaque_cookies":skipped,"profile_state":"stopped","note":"Device-bound sessions and OS-protected passwords may require signing in again."}),
     )
 }
 
@@ -444,7 +492,8 @@ fn write_archive(
     let encrypted = encryptor(password)?
         .wrap_output(output)
         .context("cannot write encrypted archive")?;
-    let mut tar = tar::Builder::new(encrypted);
+    let compressed = GzEncoder::new(encrypted, Compression::default());
+    let mut tar = tar::Builder::new(compressed);
     let data = Zeroizing::new(
         serde_json::to_vec(manifest)
             .map_err(|_| anyhow::anyhow!("cannot encode transfer manifest"))?,
@@ -458,8 +507,16 @@ fn write_archive(
         bytes: max_bytes,
         entries: MAX_ENTRIES,
     };
-    append_tree(&mut tar, chrome, Path::new(""), &mut budget)?;
+    append_tree(
+        &mut tar,
+        chrome,
+        Path::new(""),
+        &manifest.cookie_stores,
+        &mut budget,
+    )?;
     tar.into_inner()?
+        .finish()
+        .context("cannot finish compressed archive")?
         .finish()
         .context("cannot finish authenticated archive")?;
     Ok(())
@@ -483,9 +540,10 @@ fn append_tree<W: Write>(
     tar: &mut tar::Builder<W>,
     root: &Path,
     relative: &Path,
+    profiles: &[CookieStore],
     budget: &mut Budget,
 ) -> Result<()> {
-    if transient(relative) {
+    if transient(relative) || rebuildable(relative, profiles) {
         return Ok(());
     }
     let source = root.join(relative);
@@ -510,7 +568,13 @@ fn append_tree<W: Write>(
         let mut children: Vec<_> = fs::read_dir(&source)?.collect::<std::io::Result<_>>()?;
         children.sort_by_key(|c| c.file_name());
         for child in children {
-            append_tree(tar, root, &relative.join(child.file_name()), budget)?;
+            append_tree(
+                tar,
+                root,
+                &relative.join(child.file_name()),
+                profiles,
+                budget,
+            )?;
         }
     } else {
         ensure!(
@@ -594,7 +658,44 @@ fn read_archive(
         .map_err(|_| {
             anyhow::anyhow!("could not decrypt archive; wrong passphrase or damaged file")
         })?;
-    extract_archive(reader, stage, max_bytes)
+    read_payload(reader, stage, max_bytes)
+}
+
+fn read_payload(reader: impl Read, stage: &Path, max_bytes: u64) -> Result<Manifest> {
+    let mut reader = BufReader::new(reader);
+    let mut prefix = [0; 10];
+    reader
+        .read_exact(&mut prefix)
+        .context("incomplete archive payload")?;
+    let compressed = prefix[..2] == [0x1f, 0x8b];
+    if compressed {
+        // Our encoder emits a basic gzip header. Forbid optional headers to
+        // avoid unbounded filename/comment buffering from hostile archives.
+        ensure!(
+            prefix[2] == 8 && prefix[3] == 0,
+            "unsupported compressed archive header"
+        );
+    }
+    let reader = Cursor::new(prefix).chain(reader);
+    if compressed {
+        let mut decoder = GzDecoder::new(reader);
+        let manifest = extract_archive(&mut decoder, stage, max_bytes)?;
+        // gzip EOF is not necessarily age EOF. Reject concatenated members or
+        // trailing compressed bytes, and force validation of age's final tag.
+        let mut encrypted = decoder.into_inner();
+        let mut extra = [0; 1];
+        ensure!(
+            encrypted
+                .read(&mut extra)
+                .context("archive authentication failed or file is truncated")?
+                == 0,
+            "unexpected data after compressed archive"
+        );
+        Ok(manifest)
+    } else {
+        // Original uncompressed age/tar archives remain importable.
+        extract_archive(reader, stage, max_bytes)
+    }
 }
 fn extract_archive(reader: impl Read, stage: &Path, max_bytes: u64) -> Result<Manifest> {
     let mut archive = tar::Archive::new(reader);
@@ -957,6 +1058,158 @@ mod tests {
         header.set_cksum();
         tar.append(&header, io::repeat(b'x').take(size))?;
         Ok(tar.into_inner()?)
+    }
+    fn encrypt_payload(payload: &[u8]) -> Result<Vec<u8>> {
+        let mut encrypted = encryptor(secret())?.wrap_output(Vec::new())?;
+        encrypted.write_all(payload)?;
+        Ok(encrypted.finish()?)
+    }
+    fn gzip(payload: &[u8]) -> Result<Vec<u8>> {
+        let mut compressed = GzEncoder::new(Vec::new(), Compression::default());
+        compressed.write_all(payload)?;
+        Ok(compressed.finish()?)
+    }
+    #[test]
+    fn imports_legacy_and_compressed_archives_with_the_same_profile_data() -> Result<()> {
+        let tar = malicious(
+            "chrome/Default/legacy-data",
+            tar::EntryType::Regular,
+            128 * 1024,
+        )?;
+        let legacy = encrypt_payload(&tar)?;
+        let compressed = encrypt_payload(&gzip(&tar)?)?;
+        assert!(compressed.len() < legacy.len() / 20);
+        for archive in [legacy, compressed] {
+            let stage = private_tempdir()?;
+            read_archive(archive.as_slice(), secret(), stage.path(), 256 * 1024)?;
+            assert_eq!(
+                fs::read(stage.path().join("chrome/Default/legacy-data"))?,
+                vec![b'x'; 128 * 1024]
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn compressed_archives_reject_bad_checksums_trailing_members_and_expansion_bombs() -> Result<()>
+    {
+        let tar = malicious("chrome/Default/large", tar::EntryType::Regular, 128 * 1024)?;
+        let compressed = gzip(&tar)?;
+        let mut bad_crc = compressed.clone();
+        let crc = bad_crc.len() - 8;
+        bad_crc[crc] ^= 1;
+        let mut extra_member = compressed.clone();
+        extra_member.extend(gzip(b"extra member")?);
+        let mut extra_bytes = compressed.clone();
+        extra_bytes.push(0);
+        let mut optional_header = compressed.clone();
+        optional_header[3] = 8; // An unterminated gzip filename must not allocate without bounds.
+        for payload in [
+            bad_crc,
+            compressed[..compressed.len() - 1].to_vec(),
+            extra_member,
+            extra_bytes,
+            optional_header,
+        ] {
+            let encrypted = encrypt_payload(&payload)?;
+            let stage = private_tempdir()?;
+            assert!(
+                read_archive(encrypted.as_slice(), secret(), stage.path(), 256 * 1024).is_err()
+            );
+        }
+        let encrypted = encrypt_payload(&compressed)?;
+        let stage = private_tempdir()?;
+        assert!(read_archive(encrypted.as_slice(), secret(), stage.path(), 1024).is_err());
+        // Model an authenticated stream whose final verification fails only
+        // after the complete gzip member has been read.
+        struct FailedAuthenticationAtEof(Cursor<Vec<u8>>);
+        impl Read for FailedAuthenticationAtEof {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if buffer.is_empty() {
+                    return Ok(0);
+                }
+                let read = self.0.read(buffer)?;
+                if read == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "synthetic authentication failure",
+                    ));
+                }
+                Ok(read)
+            }
+        }
+        let stage = private_tempdir()?;
+        let failure = read_payload(
+            FailedAuthenticationAtEof(Cursor::new(compressed)),
+            stage.path(),
+            256 * 1024,
+        )
+        .err()
+        .context("accepted an unauthenticated stream ending")?;
+        assert!(format!("{failure:#}").contains("synthetic authentication failure"));
+        Ok(())
+    }
+    #[test]
+    fn compact_exports_omit_rebuildable_data_and_preserve_site_and_extension_storage() -> Result<()>
+    {
+        let source = source()?;
+        let skipped: Vec<_> = ROOT_REBUILDABLE
+            .iter()
+            .map(|name| format!("{name}/cached-data"))
+            .chain(
+                PROFILE_REBUILDABLE
+                    .iter()
+                    .map(|name| format!("Default/{name}/cached-data")),
+            )
+            .collect();
+        let retained = [
+            "Default/Cookies",
+            "Default/Network/Cookies",
+            "Default/Login Data",
+            "Default/Local Storage/cache-data",
+            "Default/IndexedDB/cache-data",
+            "Default/Session Storage/state",
+            "Default/Service Worker/CacheStorage/Cache/value",
+            "Default/Extensions/extension/Cache/value",
+            "Default/Local Extension Settings/extension/GPUCache/value",
+            "Default/Storage/partition/Code Cache/value",
+            "Default/CustomCache/value",
+            "Safe Browsing Extra/value",
+        ];
+        for path in skipped.iter().map(String::as_str).chain(retained) {
+            let path = source.path().join(path);
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(path.parent().unwrap())?;
+            fs::write(path, "synthetic profile data")?;
+        }
+        let mut encrypted = Vec::new();
+        write_archive(
+            &mut encrypted,
+            secret(),
+            source.path(),
+            &manifest(),
+            1024 * 1024,
+        )?;
+        let stage = private_tempdir()?;
+        read_archive(encrypted.as_slice(), secret(), stage.path(), 1024 * 1024)?;
+        for path in skipped {
+            assert!(source.path().join(&path).exists()); // Export does not delete source data.
+            assert!(!stage.path().join("chrome").join(path).exists());
+        }
+        for path in retained {
+            assert_eq!(
+                fs::read_to_string(stage.path().join("chrome").join(path))?,
+                "synthetic profile data"
+            );
+        }
+        // An actual internal profile always wins over a component-name collision.
+        let collision = [CookieStore {
+            directory: "WasmTtsEngine".into(),
+            cookies: vec![],
+        }];
+        assert!(!rebuildable(Path::new("WasmTtsEngine"), &collision));
+        Ok(())
     }
     #[test]
     fn extraction_rejects_traversal_links_special_files_and_size_bombs() -> Result<()> {

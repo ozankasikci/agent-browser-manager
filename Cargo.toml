@@ -15,6 +15,7 @@ path = "src/main.rs"
 anyhow = "1.0"
 age = { version = "0.11", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 fs2 = "0.4"
 libc = "0.2"
 rpassword = "7.4"
