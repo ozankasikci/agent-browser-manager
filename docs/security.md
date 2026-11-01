@@ -41,6 +41,8 @@ Ownership is bound to an MCP process and a browser run. An MCP crash leaves tabs
 
 `profile remove NAME` requires a stopped profile with a free port and no Chrome lock. It holds the profile registry and lifecycle locks, moves data into a private `.archive` directory, and updates the registry atomically. If the registry write fails, it attempts to restore the original directory and reports any recovery needed. It never recursively deletes browser data. Removed defaults stay disabled across setup. A later explicit creation starts a fresh profile and does not overwrite its archive.
 
+Explicit CLI `profile export` and `profile import` can transfer login cookies inside authenticated encrypted age archives, as authorized by the user. They are not MCP tools. Export copies files only after verified Chrome shutdown; `--stop` explicitly allows live cookie capture followed by shutdown. Import uses private staging and refuses to overwrite profiles. No macOS Keychain keys are extracted. See [encrypted profile transfer](profile-transfer.md) for the format, extraction limits, lifecycle behavior, and authentication limitations.
+
 Do not commit runtime data, copy private browser files into this repository, or include browser WebSocket URLs or credentials in reports. The repository ignore rules help prevent common accidents but are not a substitute for checking staged files.
 
 ## Sources
