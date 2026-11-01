@@ -2,8 +2,10 @@
 
 ## What this initial version enforces
 
-- Three fixed profile names and three fixed IPv4 loopback CDP destinations. There is no configurable remote host, wildcard bind, or extra Chrome argument field.
+- Three default profiles retain fixed ports 9222, 9223, and 9224. Validated custom profile names receive unique stable ports from 9225 through 9324 in a private registry protected by an OS file lock. There is no configurable remote host, wildcard bind, or extra Chrome argument field.
+- Profile names cannot contain path separators, dots, whitespace, uppercase characters, or shell syntax. The registry rejects duplicate names, duplicate ports, changes to default identities, and ports outside the managed custom range. Registering a profile never adopts an existing unregistered directory.
 - New, separate Chrome user-data directories. No copying, decrypting, importing, or opening your regular browser profiles.
+- Chrome's initial display name is seeded only when a manager-owned data directory is completely empty. Existing Chrome preferences are left untouched. The profile name settings follow Chromium's [profile preference definitions](https://chromium.googlesource.com/chromium/src/+/main/chrome/common/pref_names.h).
 - Chrome launched directly through a Rust process API with separate arguments, not through a shell command string. Chrome's sandbox stays enabled. No permissive remote-origin override is supplied.
 - Listener inspection with macOS `lsof`. Every listener on the chosen port must belong to the managed PID and be bound to `127.0.0.1` or `::1`; wildcard and external interfaces fail closed. The client always connects to literal `127.0.0.1`, without an HTTP proxy or DNS lookup.
 - Process start-time and command checks, the expected profile path, the CDP browser identifier, and the browser PID reported by Chrome must match before access. A conflicting port is never adopted or stopped.

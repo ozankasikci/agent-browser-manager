@@ -64,7 +64,18 @@ Reference: [Google Antigravity MCP documentation](https://antigravity.google/doc
 
 ## Choosing profiles and labels
 
-`config <client>` exposes only development by default. `--all-profiles` prints all three connections; each entry starts its own stdio server restricted to its named profile. `--agent codex-ticket-123` sets a readable ownership label. Labels are not authorization tokens and do not allow a new process to resume old tabs.
+`config <client>` exposes only development by default. `--all-profiles` prints connections for all defaults and registered custom profiles; each entry starts its own stdio server restricted to its named profile. The static templates contain only the three defaults. `--agent codex-ticket-123` sets a readable ownership label. Labels are not authorization tokens and do not allow a new process to resume old tabs.
+
+Custom names work with every client. Create or start the profile first, then generate the selected client's snippet:
+
+```sh
+./scripts/start.sh studio-team
+./bin/abm config claude --profile studio-team
+./bin/abm config codex --profile studio-team
+./bin/abm config antigravity --profile studio-team
+```
+
+These snippets use the server name `abm-studio-team` and route to that profile's registered directory and stable port. They do not alias the business profile or copy its login data.
 
 If you use a custom data directory, generate the config with that global option:
 

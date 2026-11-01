@@ -1,12 +1,13 @@
 # Agent Browser Manager
 
-A macOS CLI and stdio MCP server written in Rust. It launches three dedicated, persistent Chrome identities and routes each agent to tabs owned by its MCP session. No Node.js, npm, npx, or separate JavaScript runtime is required. The shell scripts only invoke Cargo or the compiled program.
+A macOS CLI and stdio MCP server written in Rust. It launches named, persistent Chrome profiles and routes each agent to tabs owned by its MCP session. Three default profiles are included; you can create additional profiles for individual companies or projects. No Node.js, npm, npx, or separate JavaScript runtime is required. The shell scripts only invoke Cargo or the compiled program.
 
 | Identity | Fixed CDP endpoint | Intended accounts |
 | --- | --- | --- |
 | personal | `http://127.0.0.1:9222` | Personal sites |
 | business | `http://127.0.0.1:9223` | Company accounts |
 | development | `http://127.0.0.1:9224` | Development and staging |
+| custom name | Stable localhost port from 9225 through 9324 | A company or project of your choice |
 
 Chrome data is stored outside the repository. Setup does not import your regular Chrome data, sign into sites, change your default browser, or edit agent settings. Choose which identities to expose to an agent; generated configs default to development only.
 
@@ -16,7 +17,7 @@ Chrome data is stored outside the repository. Setup does not import your regular
 - Free TCP ports 9222, 9223, and 9224 for a complete three-profile setup. A busy port is an error; the manager never attaches to its existing owner.
 - Internet access during the initial Rust dependency download. Runtime MCP and CDP communication is local. Chrome websites can use the network normally.
 
-Verified versions and results are recorded in [docs/verification.md](docs/verification.md). Linux and Windows are outside this initial implementation.
+Verified versions and initial results are recorded in [docs/verification.md](docs/verification.md), with later custom-profile checks in [docs/named-profiles-verification.md](docs/named-profiles-verification.md). Linux and Windows are outside this initial implementation.
 
 ## Build and initialize
 
@@ -38,6 +39,8 @@ Default runtime layout:
 ```text
 ~/Library/Application Support/Agent Browser Manager/
   .abm-root
+  profiles.json       # Custom profile names and stable ports, when used
+  profiles.lock
   personal/
     chrome/           # Persistent Chrome user-data directory
     browser.json      # Managed process identity, only while running
@@ -47,6 +50,9 @@ Default runtime layout:
   business/
     ...
   development/
+    ...
+  studio-team/        # Example user-named profile
+    chrome/
     ...
 ```
 
@@ -60,7 +66,32 @@ For disposable tests, use an absolute custom path whose parent already exists:
 ./bin/abm --data-dir /private/tmp/my-private-abm-test stop development
 ```
 
-An alternate data root still uses the same fixed ports. Two roots cannot run the same identity simultaneously.
+An alternate data root still uses the default fixed ports. Custom port assignments belong to that root's registry. Two running browsers cannot share a port; the manager refuses conflicting ports.
+
+## Named profiles
+
+Start a profile with the company or project name you want:
+
+```sh
+./scripts/start.sh studio-team
+./scripts/status.sh studio-team
+./bin/abm config codex --profile studio-team
+./scripts/stop.sh studio-team
+```
+
+The first start creates a separate private `studio-team/chrome` data directory and records an available localhost port in `profiles.json`. Later starts and MCP connections reuse that exact name and port. The three default ports stay unchanged. Existing business or personal data is not renamed, copied, or reused.
+
+To register a name without opening Chrome, or to choose a specific unused port:
+
+```sh
+./bin/abm profile create studio-team
+./bin/abm profile create other-team --port 9230
+./bin/abm profile list
+```
+
+Names must start with a lowercase letter, contain only lowercase letters, digits, and hyphens, and be at most 48 characters. A trailing hyphen is not allowed. Ports are assigned once from 9225 through 9324; the registry prevents duplicate names and ports. A port that becomes occupied later causes a startup error rather than silent reassignment. Unregistered existing directories are never adopted.
+
+For a completely new Chrome data directory, the manager also sets Chrome's initial display name to the chosen profile name. Existing Chrome preferences and user-chosen display names are never rewritten. The profile registry remains private runtime data outside the repository.
 
 ## Launch, sign in, stop
 
@@ -76,7 +107,7 @@ An alternate data root still uses the same fixed ports. Two roots cannot run the
 
 Each start opens a separate Chrome instance. Sign into the intended websites manually in the correct instance. A dedicated data directory retains cookies across restarts; websites may still expire sessions or request MFA. Chrome Sync and extensions are disabled for these instances. Existing windows in your regular Chrome profile are untouched.
 
-`start`, `stop`, and `status` return JSON. Start and stop are idempotent for a matching managed instance. `status business` checks one identity. All three can run together. There is no automatic startup service, remote host option, arbitrary Chrome flag passthrough, or force-stop-all command.
+`start`, `stop`, and `status` return JSON. Start and stop are idempotent for a matching managed instance. `status studio-team` checks one named profile; bare `status` includes defaults and registered custom profiles. Profiles with distinct ports can run together. There is no automatic startup service, remote host option, arbitrary Chrome flag passthrough, or force-stop-all command.
 
 For Chrome installed somewhere else:
 
@@ -96,7 +127,7 @@ Generate a config snippet using the installed binary's absolute path:
 ./bin/abm config antigravity --profile development
 ```
 
-To deliberately expose all three identities, pass `--all-profiles` instead of `--profile`. `--agent` is an optional readable label. Every MCP process gets a separate random session identity, including processes with the same label.
+To deliberately expose every registered profile, including custom profiles, pass `--all-profiles` instead of `--profile`. Use `--profile studio-team` to expose only a particular named profile. `--agent` is an optional readable label. Every MCP process gets a separate random session identity, including processes with the same label.
 
 These commands print configuration only. Merge the selected entries into your existing settings; do not replace a whole settings file. See [docs/integrations.md](docs/integrations.md) for client-specific paths, commands, examples, and primary sources. Portable three-profile templates are in [configs](configs/). Replace their binary placeholder before using them. Never put Chrome data in agent configuration.
 
@@ -140,7 +171,7 @@ Navigation returns when Chrome accepts it; the page may still be loading. Read a
 ./scripts/verify.sh --chrome
 ```
 
-The default checks cover private filesystem behavior, endpoint and navigation validation, listener ownership, JSON-RPC framing and initialization, tab grants, and all three config formats. The opt-in Rust integration test launches real headless Chrome with temporary profiles and a localhost-only Rust HTTP fixture. It tests all three endpoints together, start races, foreign-port refusal, owned-tab actions, rejected cross-session access, isolated cookies, and persistence after restart. It closes its managed browsers on completion or failure.
+The default checks cover private filesystem behavior, endpoint and navigation validation, listener ownership, JSON-RPC framing and initialization, tab grants, named-profile registration races, and all three config formats. The opt-in Rust integration test launches real headless Chrome with temporary profiles and a localhost-only Rust HTTP fixture. It tests the default endpoints together, start races, foreign-port refusal, owned-tab actions, rejected cross-session access, isolated cookies, and persistence after restart. It also verifies a user-named profile's stable endpoint, MCP scope, and retained Chrome display name. It closes its managed test browsers on completion or failure.
 
 ## Recovery
 

@@ -2,6 +2,8 @@
 
 Verified on 1 November 2026, Europe/London.
 
+This is the initial three-preset snapshot. See [named profile verification](named-profiles-verification.md) for the later custom-profile checks.
+
 ## Environment inspected
 
 - macOS 26.1, Apple Silicon arm64.
