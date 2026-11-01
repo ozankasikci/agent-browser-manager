@@ -20,10 +20,16 @@ Verified versions and results are recorded in [docs/verification.md](docs/verifi
 
 ## Build and initialize
 
+Clone the public repository, then build and initialize the private runtime directories:
+
 ```sh
+mkdir -p ~/projects
+git clone https://github.com/ozankasikci/agent-browser-manager.git ~/projects/agent-browser-manager
 cd ~/projects/agent-browser-manager
 ./scripts/setup.sh
 ```
+
+If you already have this project checked out, skip the clone command and run setup from your existing checkout.
 
 This builds with `Cargo.lock`, installs the compiled program as `bin/abm` inside this project, and creates private runtime directories. It does not launch Chrome. Run setup again after changing the Rust code to update `bin/abm`.
 

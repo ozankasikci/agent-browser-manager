@@ -18,7 +18,7 @@ Verified on 1 November 2026, Europe/London.
 - Release binary installed at `/Users/ozan/Projects/agent-browser-manager/bin/abm`.
 - Three private persistent profile directories initialized beneath `/Users/ozan/Library/Application Support/Agent Browser Manager`.
 - README, setup/start/stop/status/verification scripts, portable client configs, config generator, security documentation, and Rust tests.
-- Local Git repository on `main`, with separate descriptive commits. No remote repository configured or publication performed.
+- Local Git repository on `main`, with separate descriptive commits. This initial verification checkpoint preceded GitHub repository creation and publication.
 
 ## Checks completed
 

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Local Chrome profile lifecycle and session-owned MCP browser tools"
+repository = "https://github.com/ozankasikci/agent-browser-manager"
 license = "MIT"
 
 [[bin]]
