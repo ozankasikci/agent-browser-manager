@@ -537,11 +537,23 @@ fn encrypted_whole_profile_transfer_preserves_cookie_and_site_storage() {
         "whole-profile-file",
     )
     .unwrap();
+    let cache = "component_crx_cache/abm-synthetic-cache";
+    std::fs::create_dir_all(root.join("transfer-source/chrome/component_crx_cache")).unwrap();
+    std::fs::write(
+        root.join("transfer-source/chrome").join(cache),
+        vec![b'x'; 2 * 1024 * 1024],
+    )
+    .unwrap();
     let mut live_export_args = export_args.to_vec();
     live_export_args.push("--stop");
     let exported = cli(&root, &live_export_args);
     drop(client);
     assert!(exported["portable_cookies"].as_u64().unwrap() >= 2);
+    assert_eq!(exported["compression"], "gzip");
+    assert_eq!(
+        exported["archive_bytes"],
+        std::fs::metadata(&archive).unwrap().len()
+    );
     assert_eq!(exported["profile_state"], "stopped");
     assert_eq!(
         std::fs::metadata(&archive).unwrap().permissions().mode() & 0o777,
@@ -616,6 +628,7 @@ fn encrypted_whole_profile_transfer_preserves_cookie_and_site_storage() {
     );
     assert!(!root.join("transfer-imported/ownership.json").exists());
     assert!(!root.join("transfer-imported/browser.json").exists());
+    assert!(!root.join("transfer-imported/chrome").join(cache).exists());
     cli(&root, &["start", "transfer-imported", "--headless"]);
     let mut imported_client = Client::new(&root, "transfer-imported");
     let target = imported_client.tool(
