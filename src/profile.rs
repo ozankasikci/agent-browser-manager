@@ -132,6 +132,24 @@ impl Store {
     }
 
     pub fn create_profile(&self, name: &str, requested_port: Option<u16>) -> Result<Profile> {
+        self.register_profile(name, requested_port, None)
+    }
+
+    pub(crate) fn install_profile(
+        &self,
+        name: &str,
+        requested_port: Option<u16>,
+        chrome_dir: &std::path::Path,
+    ) -> Result<Profile> {
+        self.register_profile(name, requested_port, Some(chrome_dir))
+    }
+
+    fn register_profile(
+        &self,
+        name: &str,
+        requested_port: Option<u16>,
+        imported: Option<&std::path::Path>,
+    ) -> Result<Profile> {
         validate_name(name)?;
         let _lock = self.root_lock("profiles.lock", true)?;
         let mut catalog = self.catalog()?;
@@ -141,6 +159,10 @@ impl Store {
             .chain(catalog.custom.iter().cloned())
             .find(|p| p.name == name)
         {
+            ensure!(
+                imported.is_none(),
+                "destination profile already exists; import requires a new name"
+            );
             ensure!(
                 requested_port.is_none_or(|port| port == profile.port),
                 "profile already has a stable port; reassignment is not allowed"
@@ -199,7 +221,16 @@ impl Store {
         }
         store::make_private_dir(&dir)?;
         let result = (|| -> Result<()> {
-            store::make_private_dir(&self.chrome_dir(&profile))?;
+            if let Some(source) = imported {
+                fs::rename(source, self.chrome_dir(&profile))
+                    .context("cannot install imported Chrome data")?;
+                store::write_json(
+                    &self.path(&profile, "transfer.json"),
+                    &serde_json::json!({"schema":1,"restore_last_session":true}),
+                )?;
+            } else {
+                store::make_private_dir(&self.chrome_dir(&profile))?;
+            }
             if preset.is_some() {
                 catalog.removed_defaults.remove(name);
             } else {
@@ -208,7 +239,17 @@ impl Store {
             store::write_json(&self.root.join("profiles.json"), &catalog)
         })();
         if result.is_err() {
+            if let Some(source) = imported {
+                if self.chrome_dir(&profile).is_dir() && !source.exists() {
+                    fs::rename(self.chrome_dir(&profile), source).context(
+                        "registry update failed and imported data could not be rolled back",
+                    )?;
+                }
+            }
             // Only remove newly created empty directories; never recurse over browser data.
+            if imported.is_some() {
+                let _ = fs::remove_file(self.path(&profile, "transfer.json"));
+            }
             let _ = fs::remove_dir(self.chrome_dir(&profile));
             let _ = fs::remove_dir(&dir);
         }

@@ -20,5 +20,9 @@
 **/profiles.json
 **/profiles.lock
 **/.archive/
+*.abm.age
+*.passphrase
+**/.abm-import-*/
+**/transfer.json
 
 /bin/

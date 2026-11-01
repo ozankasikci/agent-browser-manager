@@ -5,6 +5,7 @@ mod mcp;
 mod ownership;
 mod profile;
 mod store;
+mod transfer;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -78,6 +79,37 @@ enum ProfileAction {
     List,
     /// Remove a stopped profile from active use and archive its data privately.
     Remove { name: String },
+    /// Encrypt the whole Chrome profile and portable login cookies.
+    Export {
+        name: String,
+        #[arg(
+            long,
+            help = "Capture live cookies, then close the running profile for a consistent snapshot"
+        )]
+        stop: bool,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
+        #[arg(long,default_value_t=transfer::DEFAULT_MAX_BYTES)]
+        max_bytes: u64,
+        #[arg(long)]
+        chrome: Option<PathBuf>,
+    },
+    /// Import an encrypted transfer into a new profile without overwriting data.
+    Import {
+        archive: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
+        #[arg(long,default_value_t=transfer::DEFAULT_MAX_BYTES)]
+        max_bytes: u64,
+        #[arg(long)]
+        chrome: Option<PathBuf>,
+    },
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -119,6 +151,44 @@ fn run() -> Result<()> {
             let archive = store.remove_profile(&name)?;
             json!({"profile":name,"removed":true,"archive":archive})
         }
+        Action::Profile {
+            command:
+                ProfileAction::Export {
+                    name,
+                    stop,
+                    output,
+                    passphrase_file,
+                    max_bytes,
+                    chrome,
+                },
+        } => transfer::export(
+            &store,
+            &name,
+            &output,
+            transfer::passphrase(passphrase_file.as_deref(), true)?,
+            max_bytes,
+            chrome.as_deref(),
+            stop,
+        )?,
+        Action::Profile {
+            command:
+                ProfileAction::Import {
+                    archive,
+                    name,
+                    port,
+                    passphrase_file,
+                    max_bytes,
+                    chrome,
+                },
+        } => transfer::import(
+            &store,
+            &archive,
+            name.as_deref(),
+            port,
+            transfer::passphrase(passphrase_file.as_deref(), false)?,
+            max_bytes,
+            chrome.as_deref(),
+        )?,
         Action::Profile {
             command: ProfileAction::List,
         } => json!(
