@@ -63,7 +63,11 @@ impl Store {
             f.sync_all()?;
         }
         self.check()?;
-        for profile in crate::Profile::defaults() {
+        for profile in self
+            .profiles()?
+            .into_iter()
+            .filter(|p| crate::Profile::defaults().contains(p))
+        {
             let dir = self.profile_dir(&profile);
             make_private_dir(&dir)?;
             make_private_dir(&dir.join("chrome"))?;

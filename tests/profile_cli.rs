@@ -83,3 +83,76 @@ fn racing_profile_registration_keeps_one_name_and_one_port() {
         5
     );
 }
+
+#[test]
+fn removing_a_default_archives_data_and_survives_setup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("runtime");
+    json(&root, &["init"]);
+    let data = root.join("business/chrome/keep-me");
+    std::fs::write(&data, "preserve").unwrap();
+    let removed = json(&root, &["profile", "remove", "business"]);
+    assert_eq!(removed["removed"], true);
+    let archive = Path::new(removed["archive"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(archive.join("chrome/keep-me")).unwrap(),
+        "preserve"
+    );
+    assert!(!root.join("business").exists());
+    json(&root, &["init"]);
+    assert!(!root.join("business").exists());
+    assert!(!run(&root, &["status", "business"]).status.success());
+    assert!(
+        !json(&root, &["profile", "list"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["profile"] == "business")
+    );
+    for client in ["claude", "codex", "antigravity"] {
+        let out = run(&root, &["config", client, "--all-profiles"]);
+        assert!(out.status.success());
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("abm-business"));
+    }
+    // Only an explicit new registration recreates a removed default, with fresh data.
+    assert_eq!(
+        json(&root, &["profile", "create", "business"])["port"],
+        9223
+    );
+    assert!(!root.join("business/chrome/keep-me").exists());
+    assert!(archive.join("chrome/keep-me").exists());
+}
+
+#[test]
+fn removal_refuses_locks_and_keeps_other_named_profiles() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("runtime");
+    json(&root, &["init"]);
+    let named = json(&root, &["profile", "create", "studio-team"]);
+    let lock = root.join("business/chrome/SingletonLock");
+    std::fs::write(&lock, "do not delete").unwrap();
+    assert!(
+        !run(&root, &["profile", "remove", "business"])
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), "do not delete");
+    std::fs::remove_file(lock).unwrap();
+    json(&root, &["profile", "remove", "business"]);
+    assert_eq!(
+        json(&root, &["profile", "list"])
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["profile"] == "studio-team")
+            .unwrap()["port"],
+        named["port"]
+    );
+    json(&root, &["profile", "remove", "studio-team"]);
+    assert!(!root.join("studio-team").exists());
+    assert!(
+        !run(&root, &["profile", "remove", "unknown-team"])
+            .status
+            .success()
+    );
+}

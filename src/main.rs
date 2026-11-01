@@ -76,6 +76,8 @@ enum ProfileAction {
     },
     /// List all registered profiles and their localhost endpoints without launching browsers.
     List,
+    /// Remove a stopped profile from active use and archive its data privately.
+    Remove { name: String },
 }
 fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -110,6 +112,12 @@ fn run() -> Result<()> {
         } => {
             let p = store.create_profile(&name, port)?;
             json!({"profile":p.name(),"port":p.port(),"endpoint":p.endpoint()})
+        }
+        Action::Profile {
+            command: ProfileAction::Remove { name },
+        } => {
+            let archive = store.remove_profile(&name)?;
+            json!({"profile":name,"removed":true,"archive":archive})
         }
         Action::Profile {
             command: ProfileAction::List,

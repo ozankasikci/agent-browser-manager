@@ -295,6 +295,31 @@ pub fn start(
     result
 }
 
+pub fn ensure_stopped_for_archive(store: &Store, profile: &Profile) -> Result<()> {
+    ensure!(
+        listeners(profile.port())?.is_empty(),
+        "profile port is occupied; stop the browser before removing the profile"
+    );
+    if let Some(record) = load(store, profile)? {
+        ensure!(
+            !alive(&record)?,
+            "profile process is running; stop it before removing the profile"
+        );
+    }
+    match store
+        .chrome_dir(profile)
+        .join("SingletonLock")
+        .symlink_metadata()
+    {
+        Ok(_) => bail!(
+            "Chrome profile lock exists; close Chrome and inspect any stale lock before removing this profile"
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e).context("cannot safely inspect Chrome's profile lock"),
+    }
+    Ok(())
+}
+
 pub fn stop(store: &Store, profile: &Profile) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", true)?;
     let found = listeners(profile.port())?;

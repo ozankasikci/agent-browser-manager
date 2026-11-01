@@ -415,6 +415,15 @@ fn three_profiles_mcp_ownership_and_persistence() {
         cli(&root, &["status", "studio-team"])[0]["state"],
         "running"
     );
+    assert!(
+        !invoke(&root, &["profile", "remove", "studio-team"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        cli(&root, &["status", "studio-team"])[0]["state"],
+        "running"
+    );
     assert_eq!(started["profile"], "studio-team");
     let endpoint = started["endpoint"].clone();
     let mut a = Client::new(&root, "studio-team");
@@ -449,4 +458,8 @@ fn three_profiles_mcp_ownership_and_persistence() {
         endpoint
     );
     cli(&root, &["stop", "studio-team"]);
+    let removed = cli(&root, &["profile", "remove", "studio-team"]);
+    let archived = Path::new(removed["archive"].as_str().unwrap());
+    assert!(archived.join("chrome/Default/Preferences").is_file());
+    assert!(!root.join("studio-team").exists());
 }

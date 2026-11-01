@@ -58,6 +58,8 @@ impl Profile {
 struct Catalog {
     schema: u32,
     custom: Vec<Profile>,
+    #[serde(default)]
+    removed_defaults: BTreeSet<String>,
 }
 
 pub fn validate_name(name: &str) -> Result<()> {
@@ -82,8 +84,16 @@ impl Store {
             store::read_json(&self.root.join("profiles.json"))?.unwrap_or(Catalog {
                 schema: 1,
                 custom: Vec::new(),
+                removed_defaults: BTreeSet::new(),
             });
         ensure!(catalog.schema == 1, "unrecognized profile registry version");
+        ensure!(
+            catalog
+                .removed_defaults
+                .iter()
+                .all(|name| Profile::defaults().iter().any(|p| p.name() == name)),
+            "registry contains an unknown removed default"
+        );
         let mut names: BTreeSet<_> = Profile::defaults().into_iter().map(|p| p.name).collect();
         let mut ports: BTreeSet<_> = Profile::defaults().into_iter().map(|p| p.port).collect();
         for profile in &catalog.custom {
@@ -102,8 +112,12 @@ impl Store {
 
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let _lock = self.root_lock("profiles.lock", false)?;
-        let mut profiles = Profile::defaults();
-        let mut custom = self.catalog()?.custom;
+        let catalog = self.catalog()?;
+        let mut profiles: Vec<_> = Profile::defaults()
+            .into_iter()
+            .filter(|p| !catalog.removed_defaults.contains(p.name()))
+            .collect();
+        let mut custom = catalog.custom;
         custom.sort_by(|a, b| a.name.cmp(&b.name));
         profiles.extend(custom);
         Ok(profiles)
@@ -111,9 +125,6 @@ impl Store {
 
     pub fn resolve_profile(&self, name: &str) -> Result<Profile> {
         validate_name(name)?;
-        if let Some(profile) = Profile::defaults().into_iter().find(|p| p.name == name) {
-            return Ok(profile);
-        }
         self.profiles()?
             .into_iter()
             .find(|p| p.name == name)
@@ -126,6 +137,7 @@ impl Store {
         let mut catalog = self.catalog()?;
         if let Some(profile) = Profile::defaults()
             .into_iter()
+            .filter(|p| !catalog.removed_defaults.contains(p.name()))
             .chain(catalog.custom.iter().cloned())
             .find(|p| p.name == name)
         {
@@ -137,16 +149,26 @@ impl Store {
             store::check_dir(&self.chrome_dir(&profile))?;
             return Ok(profile);
         }
-        if let Some(port) = requested_port {
+        let preset = Profile::defaults().into_iter().find(|p| p.name() == name);
+        if let Some(preset) = &preset {
+            ensure!(
+                requested_port.is_none_or(|port| port == preset.port()),
+                "default profile ports cannot be reassigned"
+            );
+        } else if let Some(port) = requested_port {
             ensure!(
                 (FIRST_CUSTOM_PORT..=LAST_CUSTOM_PORT).contains(&port),
                 "custom ports must be in 9225..=9324; default ports cannot be reassigned"
             );
         }
-        let candidates: Vec<_> = requested_port.map_or_else(
-            || (FIRST_CUSTOM_PORT..=LAST_CUSTOM_PORT).collect(),
-            |p| vec![p],
-        );
+        let candidates: Vec<_> = preset
+            .as_ref()
+            .map(Profile::port)
+            .or(requested_port)
+            .map_or_else(
+                || (FIRST_CUSTOM_PORT..=LAST_CUSTOM_PORT).collect(),
+                |p| vec![p],
+            );
         let mut selected = None;
         for port in candidates {
             if catalog.custom.iter().any(|p| p.port == port) {
@@ -178,7 +200,11 @@ impl Store {
         store::make_private_dir(&dir)?;
         let result = (|| -> Result<()> {
             store::make_private_dir(&self.chrome_dir(&profile))?;
-            catalog.custom.push(profile.clone());
+            if preset.is_some() {
+                catalog.removed_defaults.remove(name);
+            } else {
+                catalog.custom.push(profile.clone());
+            }
             store::write_json(&self.root.join("profiles.json"), &catalog)
         })();
         if result.is_err() {
@@ -188,6 +214,45 @@ impl Store {
         }
         result?;
         Ok(profile)
+    }
+
+    pub fn remove_profile(&self, name: &str) -> Result<std::path::PathBuf> {
+        validate_name(name)?;
+        let _registry_lock = self.root_lock("profiles.lock", true)?;
+        let mut catalog = self.catalog()?;
+        let profile = Profile::defaults()
+            .into_iter()
+            .filter(|p| !catalog.removed_defaults.contains(p.name()))
+            .chain(catalog.custom.iter().cloned())
+            .find(|p| p.name() == name)
+            .context("unknown or already removed profile")?;
+        let _lifecycle_lock = self.lock(&profile, "lifecycle.lock", true)?;
+        browser::ensure_stopped_for_archive(self, &profile)?;
+        let archives = self.root.join(".archive");
+        store::make_private_dir(&archives)?;
+        let archive = archives.join(format!("{}-{}", name, uuid::Uuid::new_v4()));
+        ensure!(
+            archive.symlink_metadata().is_err(),
+            "archive destination already exists"
+        );
+        let original = self.profile_dir(&profile);
+        if Profile::defaults().iter().any(|p| p.name() == name) {
+            catalog.removed_defaults.insert(name.into());
+        } else {
+            catalog.custom.retain(|p| p.name() != name);
+        }
+        fs::rename(&original, &archive).context("cannot archive profile directory")?;
+        if let Err(error) = store::write_json(&self.root.join("profiles.json"), &catalog) {
+            fs::rename(&archive, &original).with_context(|| {
+                format!(
+                    "registry update failed; profile data remains at {}",
+                    archive.display()
+                )
+            })?;
+            return Err(error)
+                .context("registry update failed; original profile directory restored");
+        }
+        Ok(archive)
     }
 }
 
@@ -278,7 +343,11 @@ mod tests {
         ] {
             store::write_json(
                 &store.root.join("profiles.json"),
-                &Catalog { schema: 1, custom },
+                &Catalog {
+                    schema: 1,
+                    custom,
+                    removed_defaults: BTreeSet::new(),
+                },
             )?;
             assert!(store.profiles().is_err());
         }
