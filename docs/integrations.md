@@ -77,6 +77,8 @@ Custom names work with every client. Create or start the profile first, then gen
 
 These snippets use the server name `abm-studio-team` and route to that profile's registered directory and stable port. They do not alias the business profile or copy its login data.
 
+Profiles removed through `profile remove NAME` are omitted from `--all-profiles` output, including removed defaults. Existing client settings are not rewritten automatically; remove an old connection from the client deliberately if it is no longer wanted.
+
 If you use a custom data directory, generate the config with that global option:
 
 ```sh

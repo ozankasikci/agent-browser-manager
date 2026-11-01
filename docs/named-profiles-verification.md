@@ -18,3 +18,7 @@ Verified on 1 November 2026 on the same macOS, Rust, and Chrome environment reco
 The original 14-test snapshot remains in `verification.md` as the initial checkpoint. The feature follow-up has 20 non-browser tests plus the opt-in real-browser integration test. Tests use disposable directories, generic profile names, and a local fixture; private user registry entries and browser data are not included in this repository.
 
 The named-profile update does not rename, copy, or delete existing profile data. It does not update agent-global settings. Real site authentication, client UI activation, and visual review of Chrome windows remain outside the automated verification.
+
+## Removal follow-up
+
+The later removal checks passed with 18 unit tests and four CLI integration tests. They verify that removal archives saved data, removes a profile from active listing and all generated client configs, survives `init`, preserves another named profile's stable port, rejects Chrome locks and unknown names, and permits only explicit fresh recreation of a removed default. The extended release Chrome test also rejects removing a running named browser and archives it successfully after graceful shutdown. Private archives are excluded from the repository.

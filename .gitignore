@@ -19,5 +19,6 @@
 **/ownership.json
 **/profiles.json
 **/profiles.lock
+**/.archive/
 
 /bin/

@@ -93,6 +93,19 @@ Names must start with a lowercase letter, contain only lowercase letters, digits
 
 For a completely new Chrome data directory, the manager also sets Chrome's initial display name to the chosen profile name. Existing Chrome preferences and user-chosen display names are never rewritten. The profile registry remains private runtime data outside the repository.
 
+## Remove a profile
+
+Stop the profile, then remove it from active use:
+
+```sh
+./scripts/stop.sh studio-team
+./bin/abm profile remove studio-team
+```
+
+Removal moves the entire directory into the private runtime root's `.archive` directory and returns that archive path. Browser data remains recoverable. A running process, occupied profile port, or Chrome lock blocks removal. Other profiles are unaffected.
+
+Default profiles can be removed in the same way. The private registry remembers removed defaults, so `init`, setup, profile listing, and generated `--all-profiles` configs do not bring them back. An explicit later `start NAME` or `profile create NAME` creates fresh data for that name; it does not import the archived data. Default port assignments remain fixed when explicitly recreated.
+
 ## Launch, sign in, stop
 
 ```sh
