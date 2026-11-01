@@ -9,6 +9,7 @@ Verified on 1 November 2026 on the same macOS, Rust, and Chrome environment reco
 - Chrome retained the custom name in both its profile preferences and its profile-info cache after a real launch and graceful shutdown.
 - Named-profile MCP sessions were restricted to their own tabs. A second session could not read the first session's tab.
 - Restart retained the assigned endpoint, and the three default endpoints remained unchanged.
+- The release integration test terminated the isolated launcher's process group after startup and confirmed that the named Chrome profile stayed running in its independent session. A separate normal-mode status command also confirmed survival after the original launch command finished.
 - Concurrent CLI registration of the same name produced one profile and one port. A different registered name received a different port.
 - Generated Claude Code, Codex, and Antigravity configs selected the custom name instead of a default identity.
 - Unsafe names, reserved ports, duplicate registry entries, and unregistered existing directories were rejected.

@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -387,7 +388,33 @@ fn three_profiles_mcp_ownership_and_persistence() {
     );
 
     // A user-named profile has its own directory, stable endpoint, MCP scope, and Chrome name.
-    let started = cli(&root, &["start", "studio-team", "--headless"]);
+    let launcher = Command::new(BIN)
+        .arg("--data-dir")
+        .arg(&root)
+        .args(["start", "studio-team", "--headless"])
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let launcher_group = i32::try_from(launcher.id()).unwrap();
+    let output = launcher.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let started: Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Simulate terminal/agent cleanup after the short-lived launcher exits.
+    // SAFETY: this is the isolated process group created for this test launcher.
+    unsafe {
+        libc::kill(-launcher_group, libc::SIGTERM);
+    }
+    thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        cli(&root, &["status", "studio-team"])[0]["state"],
+        "running"
+    );
     assert_eq!(started["profile"], "studio-team");
     let endpoint = started["endpoint"].clone();
     let mut a = Client::new(&root, "studio-team");

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     net::{Ipv4Addr, SocketAddr, TcpListener},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -234,6 +235,17 @@ pub fn start(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // A persistent browser must outlive its invoking terminal/agent process group.
+    // SAFETY: pre_exec calls only the async-signal-safe setsid syscall and obtains
+    // errno on failure. No locks, allocation, or application callbacks run here.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     drop(guard);
     let mut child = command.spawn().context("cannot launch Chrome")?;
     let result = (|| -> Result<Value> {

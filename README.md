@@ -105,7 +105,7 @@ For a completely new Chrome data directory, the manager also sets Chrome's initi
 ./scripts/stop.sh personal
 ```
 
-Each start opens a separate Chrome instance. Sign into the intended websites manually in the correct instance. A dedicated data directory retains cookies across restarts; websites may still expire sessions or request MFA. Chrome Sync and extensions are disabled for these instances. Existing windows in your regular Chrome profile are untouched.
+Each start opens a separate Chrome instance in an independent process session, so it can remain open after the invoking terminal or agent command exits. Sign into the intended websites manually in the correct instance. A dedicated data directory retains cookies across restarts; websites may still expire sessions or request MFA. Chrome Sync and extensions are disabled for these instances. Existing windows in your regular Chrome profile are untouched.
 
 `start`, `stop`, and `status` return JSON. Start and stop are idempotent for a matching managed instance. `status studio-team` checks one named profile; bare `status` includes defaults and registered custom profiles. Profiles with distinct ports can run together. There is no automatic startup service, remote host option, arbitrary Chrome flag passthrough, or force-stop-all command.
 

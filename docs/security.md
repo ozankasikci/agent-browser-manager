@@ -7,6 +7,7 @@
 - New, separate Chrome user-data directories. No copying, decrypting, importing, or opening your regular browser profiles.
 - Chrome's initial display name is seeded only when a manager-owned data directory is completely empty. Existing Chrome preferences are left untouched. The profile name settings follow Chromium's [profile preference definitions](https://chromium.googlesource.com/chromium/src/+/main/chrome/common/pref_names.h).
 - Chrome launched directly through a Rust process API with separate arguments, not through a shell command string. Chrome's sandbox stays enabled. No permissive remote-origin override is supplied.
+- A new process session separates persistent Chrome from the invoking terminal or agent's process group. This preserves browser lifetime across launcher cleanup without granting additional permissions or exposing any new listener.
 - Listener inspection with macOS `lsof`. Every listener on the chosen port must belong to the managed PID and be bound to `127.0.0.1` or `::1`; wildcard and external interfaces fail closed. The client always connects to literal `127.0.0.1`, without an HTTP proxy or DNS lookup.
 - Process start-time and command checks, the expected profile path, the CDP browser identifier, and the browser PID reported by Chrome must match before access. A conflicting port is never adopted or stopped.
 - Private runtime directories and state files. Runtime files are opened without following symlinks; hard-linked state files are rejected. State replacement is atomic. Marker validation rejects unfamiliar populated roots.
