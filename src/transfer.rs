@@ -109,7 +109,10 @@ fn check_directory_name(name: &str) -> Result<()> {
     checked_path(Path::new(name))?;
     ensure!(
         Path::new(name).components().count() == 1
-            && !matches!(name, "System Profile" | "Guest Profile"),
+            && !matches!(
+                name,
+                "System Profile" | "Guest Profile" | "NativeMessagingHosts"
+            ),
         "unsupported Chrome profile directory"
     );
     Ok(())
@@ -543,7 +546,10 @@ fn append_tree<W: Write>(
     profiles: &[CookieStore],
     budget: &mut Budget,
 ) -> Result<()> {
-    if transient(relative) || rebuildable(relative, profiles) {
+    if transient(relative)
+        || relative == Path::new("NativeMessagingHosts")
+        || rebuildable(relative, profiles)
+    {
         return Ok(());
     }
     let source = root.join(relative);
@@ -658,7 +664,18 @@ fn read_archive(
         .map_err(|_| {
             anyhow::anyhow!("could not decrypt archive; wrong passphrase or damaged file")
         })?;
-    read_payload(reader, stage, max_bytes)
+    let manifest = read_payload(reader, stage, max_bytes)?;
+    // Native host registrations contain machine-specific executable paths.
+    // Legacy archives may carry them, but a new machine must register its own
+    // local bridge rather than inherit launchers from the source computer.
+    let hosts = stage.join("chrome/NativeMessagingHosts");
+    match fs::symlink_metadata(&hosts) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(&hosts)?,
+        Ok(_) => fs::remove_file(&hosts)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e).context("cannot clear imported native host registrations"),
+    }
+    Ok(manifest)
 }
 
 fn read_payload(reader: impl Read, stage: &Path, max_bytes: u64) -> Result<Manifest> {
@@ -1090,6 +1107,18 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn legacy_native_host_registrations_are_not_installed_on_a_new_machine() -> Result<()> {
+        for kind in [tar::EntryType::Regular, tar::EntryType::Directory] {
+            let payload = malicious("chrome/NativeMessagingHosts", kind, 0)?;
+            let encrypted = encrypt_payload(&payload)?;
+            let stage = private_tempdir()?;
+            read_archive(encrypted.as_slice(), secret(), stage.path(), 1024)?;
+            assert!(!stage.path().join("chrome/NativeMessagingHosts").exists());
+            assert!(stage.path().join("chrome/Default").is_dir());
+        }
+        Ok(())
+    }
+    #[test]
     fn compressed_archives_reject_bad_checksums_trailing_members_and_expansion_bombs() -> Result<()>
     {
         let tar = malicious("chrome/Default/large", tar::EntryType::Regular, 128 * 1024)?;
@@ -1160,6 +1189,7 @@ mod tests {
                     .iter()
                     .map(|name| format!("Default/{name}/cached-data")),
             )
+            .chain(["NativeMessagingHosts/example.json".to_owned()])
             .collect();
         let retained = [
             "Default/Cookies",

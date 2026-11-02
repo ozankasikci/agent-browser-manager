@@ -65,6 +65,8 @@ If temporary Chrome cannot be stopped, private recovery data is retained and its
 
 Machine/process state such as Chrome singleton locks, debugging endpoint files, and running-version links is excluded. Manager process records, agent tab grants, manager registry entries, agent configuration backups, and removed-profile archives are outside the selected Chrome directory and are not exported. Incognito/guest in-memory sessions are not transferred. Symbolic links, hard links, sockets and other special files are rejected, except the explicitly excluded Chrome runtime links.
 
+Native messaging host registrations are machine-specific connection settings. New exports omit `chrome/NativeMessagingHosts`; imports discard registrations found in older archives after authentication and before launching Chrome. Prepare the destination computer's own Claude bridge registrations using the [extension setup instructions](integrations.md#extension-based-browser-tools). Extension data itself remains included, but copied browser files do not prove that extensions will be enabled or connected on the new computer. Temporary transfer launches disable extensions; a normal visible launch allows them.
+
 ## Rebuildable data excluded from new exports
 
 Only these exact paths are skipped. Export does not delete them from the source:
