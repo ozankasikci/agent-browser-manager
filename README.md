@@ -120,7 +120,9 @@ For encrypted migration of browser data and available logins to another Mac, see
 ./scripts/stop.sh personal
 ```
 
-Each start opens a separate Chrome instance in an independent process session, so it can remain open after the invoking terminal or agent command exits. Sign into the intended websites manually in the correct instance. A dedicated data directory retains cookies across restarts; websites may still expire sessions or request MFA. Chrome Sync and extensions are disabled for these instances. Existing windows in your regular Chrome profile are untouched.
+Each start opens a separate Chrome instance in an independent process session, so it can remain open after the invoking terminal or agent command exits. Sign into the intended websites manually in the correct instance. A dedicated data directory retains cookies across restarts; websites may still expire sessions or request MFA. Chrome Sync stays disabled. Normal visible launches allow installed extensions, including Claude in Chrome and Playwright; headless and transfer launches disable them. Existing windows in your regular Chrome profile are untouched.
+
+Install and connect extensions inside the intended ABM Chrome profile. See [extension-based browser tools](docs/integrations.md#extension-based-browser-tools) for setup. `status` reports `extensions_allowed` for running browsers. If an already-running browser has different extension launch settings, `start` reports `restart_required: true` and leaves it open. Finish any unsaved work, then stop and start that profile to apply the new settings.
 
 `start`, `stop`, and `status` return JSON. Start and stop are idempotent for a matching managed instance. `status studio-team` checks one named profile; bare `status` includes defaults and registered custom profiles. Profiles with distinct ports can run together. There is no automatic startup service, remote host option, arbitrary Chrome flag passthrough, or force-stop-all command.
 

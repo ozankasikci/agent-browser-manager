@@ -7,6 +7,7 @@
 - New, separate Chrome user-data directories. No copying, decrypting, importing, or opening your regular browser profiles.
 - Chrome's initial display name is seeded only when a manager-owned data directory is completely empty. Existing Chrome preferences are left untouched. The profile name settings follow Chromium's [profile preference definitions](https://chromium.googlesource.com/chromium/src/+/main/chrome/common/pref_names.h).
 - Chrome launched directly through a Rust process API with separate arguments, not through a shell command string. Chrome's sandbox stays enabled. No permissive remote-origin override is supplied.
+- Installed extensions are allowed in visible normal launches. Headless automation and temporary transfer launches retain `--disable-extensions`. Sync remains disabled. ABM does not install extensions or approve their permissions automatically.
 - A new process session separates persistent Chrome from the invoking terminal or agent's process group. This preserves browser lifetime across launcher cleanup without granting additional permissions or exposing any new listener.
 - Listener inspection with macOS `lsof`. Every listener on the chosen port must belong to the managed PID and be bound to `127.0.0.1` or `::1`; wildcard and external interfaces fail closed. The client always connects to literal `127.0.0.1`, without an HTTP proxy or DNS lookup.
 - Process start-time and command checks, the expected profile path, the CDP browser identifier, and the browser PID reported by Chrome must match before access. A conflicting port is never adopted or stopped.
@@ -26,6 +27,8 @@ The MCP server coordinates cooperating clients. It is not an isolation layer aga
 Do not forward CDP ports over SSH, expose them through a tunnel, bind them externally, or add a reverse proxy. A manager check detects unsafe listeners when it starts or connects; it cannot prevent an unrelated program from opening its own external debugging listener.
 
 Within one Chrome identity, all tabs share site state. Browser-wide login/logout, local storage, cookies, service workers, rate limits, account preferences, and website changes can affect other agents. Tab ownership prevents accidental direct control of another session's tab; it cannot isolate those shared effects. Personal, business, and development use separate Chrome data directories, not merely separate tabs.
+
+Extension-based tools such as Claude in Chrome and Playwright use their own connections and permissions. They do not pass through ABM's MCP tab-ownership checks. Keep each tool in its own tabs and do not let multiple tools operate the same tab concurrently. Native messaging registrations belong to the local computer and must be prepared there; profile exports omit them, and imports discard registrations present in legacy archives after authentication.
 
 A browser page remains an active website. HTTP(S) input validation does not restrict redirects, subresources, private-network requests, popups, or downloads initiated by that page. Do not treat it as an origin allowlist, SSRF defense, or local-file security boundary. Chrome supplies its ordinary browser security model.
 
