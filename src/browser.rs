@@ -185,6 +185,13 @@ pub fn start(
     start_locked(store, profile, chrome, headless, None)
 }
 
+fn extensions_allowed(record: &Record) -> Result<bool> {
+    let command = process_field(record.pid, "command=")?.context("managed browser has exited")?;
+    Ok(!command
+        .split_ascii_whitespace()
+        .any(|arg| arg == "--disable-extensions"))
+}
+
 pub(crate) fn start_locked(
     store: &Store,
     profile: &Profile,
@@ -192,12 +199,18 @@ pub(crate) fn start_locked(
     headless: bool,
     internal_profile: Option<&str>,
 ) -> Result<Value> {
+    let allow_extensions = !headless && internal_profile.is_none();
     if let Some(record) = load(store, profile)? {
         if alive(&record)? {
             connect(store, profile)?;
-            return Ok(
-                json!({"profile":profile.name(),"state":"running","already_running":true,"endpoint":profile.endpoint()}),
-            );
+            let actual = extensions_allowed(&record)?;
+            let mut result = json!({"profile":profile.name(),"state":"running","already_running":true,"endpoint":profile.endpoint(),"extensions_allowed":actual,"restart_required":actual != allow_extensions});
+            if actual != allow_extensions {
+                result["note"] = json!(
+                    "Stop and start this profile to apply the requested extension settings. An existing browser is never restarted automatically."
+                );
+            }
+            return Ok(result);
         }
     }
     ensure!(
@@ -233,10 +246,14 @@ pub(crate) fn start_locked(
         format!("--remote-debugging-port={}", profile.port()),
         "--no-first-run".to_owned(),
         "--no-default-browser-check".to_owned(),
-        "--disable-extensions".to_owned(),
         "--disable-sync".to_owned(),
         "--disable-background-mode".to_owned(),
     ]);
+    // Visible everyday profiles need installed browser bridges such as Claude
+    // and Playwright. Headless automation and transfer launches stay isolated.
+    if !allow_extensions {
+        command.arg("--disable-extensions");
+    }
     if headless {
         command.arg("--headless=new");
     }
@@ -305,7 +322,7 @@ pub(crate) fn start_locked(
                     store::write_json(&store.path(profile, "browser.json"), &record)?;
                     connect(store, profile)?;
                     return Ok(
-                        json!({"profile":profile.name(),"state":"running","already_running":false,"endpoint":profile.endpoint()}),
+                        json!({"profile":profile.name(),"state":"running","already_running":false,"endpoint":profile.endpoint(),"extensions_allowed":allow_extensions,"restart_required":false}),
                     );
                 }
             }
@@ -421,24 +438,69 @@ pub fn status(store: &Store, profile: &Profile) -> Result<Value> {
     let _lock = store.lock(profile, "lifecycle.lock", false)?;
     let found = listeners(profile.port())?;
     let record = load(store, profile)?;
-    let state = match record {
+    let (state, extensions) = match record {
         Some(record) if alive(&record)? => {
             connect(store, profile)?;
-            "running"
+            ("running", Some(extensions_allowed(&record)?))
         }
-        Some(_) if found.is_empty() => "stale",
-        None if found.is_empty() => "stopped",
+        Some(_) if found.is_empty() => ("stale", None),
+        None if found.is_empty() => ("stopped", None),
         _ => bail!(
             "profile {} has an occupied CDP port without a matching managed process",
             profile.name()
         ),
     };
-    Ok(json!({"profile":profile.name(),"state":state,"endpoint":profile.endpoint()}))
+    Ok(
+        json!({"profile":profile.name(),"state":state,"endpoint":profile.endpoint(),"extensions_allowed":extensions}),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "real Chrome extension launch policy; requires macOS and a free managed port"]
+    fn visible_profiles_allow_extensions_but_headless_and_transfer_launches_disable_them()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let store = Store::new(Some(temp.path().join("runtime")))?;
+        store.init()?;
+        let profile = store.create_profile("extension-test", None)?;
+        let result = (|| -> Result<()> {
+            for (headless, internal, expected) in [
+                (false, None, true),
+                (true, None, false),
+                (false, Some("Default"), false),
+            ] {
+                let _lock = store.lock(&profile, "lifecycle.lock", true)?;
+                let started = start_locked(&store, &profile, None, headless, internal)?;
+                let (record, _) = connect(&store, &profile)?;
+                ensure!(
+                    extensions_allowed(&record)? == expected
+                        && started["extensions_allowed"] == expected,
+                    "incorrect extension launch policy"
+                );
+                if internal.is_none() {
+                    let repeated = start_locked(&store, &profile, None, !headless, None)?;
+                    ensure!(
+                        repeated["restart_required"] == true && repeated["already_running"] == true,
+                        "changed settings must request a restart"
+                    );
+                    ensure!(
+                        load(&store, &profile)?
+                            .context("missing browser record")?
+                            .pid
+                            == record.pid,
+                        "an existing browser was restarted"
+                    );
+                }
+                stop_locked(&store, &profile)?;
+            }
+            Ok(())
+        })();
+        let _ = stop(&store, &profile);
+        result
+    }
     #[test]
     fn forged_record_cannot_stop_an_unrelated_process() -> Result<()> {
         let temp = tempfile::tempdir()?;
